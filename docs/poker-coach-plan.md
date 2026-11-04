@@ -78,28 +78,27 @@ Phases 1–3 alone put you well ahead of a casual table. Phases 4–5 are the im
 
 ---
 
-## Next action: capture the Torn table HTML (home PC)
+## Source of truth
 
-1. Open Torn poker in Chrome and sit at a table. **Copy the exact URL** from the address bar, because the script's `@match` lines need it.
-2. During a hand, right-click the table → **Inspect**.
-3. In DevTools, find the element that wraps the whole table. Right-click it → **Copy → Copy outerHTML**.
-4. Paste into a `.txt` file. Grab **2–3 snapshots**: preflop with your cards dealt, flop or turn, and ideally a moment when it's your turn to act, so the call amount is showing.
-5. Attach them in a chat in this project. Claude fills in `TornAdapter.SELECTORS` and the seat parsing.
-
-What we're looking for in the HTML: how cards are marked up (class names like `card-hearts-A`?), where the pot amount lives, how seats and stacks are structured, how the dealer button is shown, and where the call amount appears.
+**Code lives on GitHub: https://github.com/kpanapabusiness-droid/Poker_Bot.** This project keeps only the plan and the README.
 
 ## Getting it running
 
-1. Install **Tampermonkey** in Chrome.
-2. Put `poker-engine.js` in a GitHub repo, then add `// @require https://raw.githubusercontent.com/<you>/<repo>/main/poker-engine.js` to the userscript header. For a quick test, you can paste the engine above the script instead.
-3. Create a new Tampermonkey script and paste in `torn-poker-coach.user.js`.
-4. **Test the panel before the adapter is done:** on the poker page, open the console and run:
-   ```js
-   window.__coachTestState = { heroCards:['As','Kd'], board:['Qs','7d','2c'], pot:150, toCall:50,
-     players:[{inHand:true},{inHand:true,isHero:true}] };
-   ```
-   The panel should show a recommendation. Delete the variable to go back to live reading.
-5. Run engine tests anytime with `node test-engine.js`.
+1. Install **Tampermonkey** in Chrome, and turn on **Allow user scripts** for it (chrome://extensions → Tampermonkey → Details).
+2. Open https://raw.githubusercontent.com/kpanapabusiness-droid/Poker_Bot/main/torn-poker-coach.user.js and Tampermonkey offers to install it.
+3. Sit at a Torn poker table. The panel appears top-right and can be dragged anywhere.
+4. After updates: Tampermonkey dashboard → the script → **Externals** → refresh, so it picks up the new engine and adapter.
+5. Run all tests with `npm install && npm test`.
+
+## Next action: live testing
+
+Play a session with the panel on, and note anything that looks wrong: misread cards, wrong position, wrong to-call amount, odd advice. If something misreads, save a snapshot at that moment with the console snippet below and drop it in a chat. It becomes a new test fixture.
+
+```js
+(() => { const b = new Blob([document.documentElement.outerHTML], {type: 'text/html'}); const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'torn-poker-' + Date.now() + '.html'; a.click(); })();
+```
+
+Snapshots contain other players' names. Before committing them, anonymise them the same way the existing fixtures were.
 
 ---
 
@@ -115,10 +114,18 @@ What we're looking for in the HTML: how cards are marked up (class names like `c
 | `rfiRange(pos)` / `positionFromSeat(seatsFromBtn, n)` | Starter open-raise ranges: EP 13%, LJ 20%, HJ 25%, CO 34%, BTN 47%, SB 37%. **Approximations, not solver output.** |
 | `evaluate(cards)` / `handName(score)` | 5–7 card evaluator. A higher score is a better hand. |
 
-**Known limits to fix later:** equity is "showdown equity" (it ignores future betting and implied odds); preflop ranges are approximations; villain ranges default to random until Phase 3; `advise()` uses fixed thresholds.
+| `allCombos()` / `handFeatures(hand, board)` / `narrowRange(combos, board, action)` | Postflop narrowing. Flop bets and any calls keep pair-or-better plus draws. Turn and river bets keep top pair or better (plus draws on the turn). A share of weak hands is kept as bluffs (20%) or floats (33%). |
+
+**Torn adapter (torn-adapter.js):** `readState(document)` → TableState. Also `positions(state, positionFromSeat)`, `preflopActions(state)` and `parseLogLine(actor, text)`.
+
+**Known limits to fix later:**
+- Equity is "showdown equity": it ignores future betting and implied odds.
+- Preflop ranges are approximations.
+- Narrowing ignores bet size and reads every player the same way. Phase 3 fixes this with per-player stats.
+- `advise()` uses fixed thresholds.
+- Tournaments (ICM) aren't modelled.
 
 ## Open questions
 
-- Torn poker table size (6- or 9-handed?) and blind structure. This affects position mapping.
-- Torn's exact poker URL for `@match`.
 - Which browser site the friends' tournament will use.
+- Tournament tables: check that the adapter reads them the same way as cash tables (take a snapshot).
