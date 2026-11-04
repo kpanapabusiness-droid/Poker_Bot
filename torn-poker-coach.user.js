@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn Poker Coach
 // @namespace    keanu.poker.coach
-// @version      0.5.0
+// @version      0.5.1
 // @description  Live poker coach for Torn: tells you what to do and how much (value, bluff, semi-bluff), with equity, odds, positions and opponent ranges. Display only — never clicks or acts.
 // @match        https://www.torn.com/page.php?sid=holdem*
 // @require      https://raw.githubusercontent.com/kpanapabusiness-droid/Poker_Bot/main/poker-engine.js
@@ -112,7 +112,7 @@
   }
 
   // ─────────────────────────── Coach logic ───────────────────────────
-  let lastKey = '', lastResult = null;
+  let lastKey = '', lastResult = null, resultSeq = 0;
   function compute(state) {
     if (!state || !state.heroInHand || state.heroCards.length !== 2) return null;
     const pos = A.positions(state, E.positionFromSeat);
@@ -139,7 +139,7 @@
     };
     const d = S.decide(ctx);
     const eff = Math.min(state.heroStack + state.heroBet, Math.max(0, ...villains.map(v => v.stack + v.bet)) || Infinity);
-    lastResult = { d, villains, heroPos: pos[0] || '?', inPosition, bb, spr: state.pot ? eff / state.pot : null,
+    lastResult = { resultId: ++resultSeq, d, villains, heroPos: pos[0] || '?', inPosition, bb, spr: state.pot ? eff / state.pot : null,
       handClass: E.handClass(ctx.hero) };
     return lastResult;
   }
@@ -156,9 +156,13 @@
   document.body.appendChild(panel);
   makeDraggable(panel);
 
-  const pct = x => (x == null ? '—' : Math.round(x * 100) + '%');
-  const usd = x => '$' + Math.round(x).toLocaleString();
-  const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  // Formatting + escaping. Everything that comes from the page (player names, log text, cards) goes
+  // through esc() before it touches innerHTML; numbers go through pct()/usd(), which only ever emit digits.
+  const finite = x => typeof x === 'number' && isFinite(x);
+  const pct = x => (finite(x) ? Math.round(x * 100) + '%' : '—');
+  const usd = x => (finite(x) ? '$' + Math.round(x).toLocaleString() : '—');
+  const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;', '`': '&#96;' };
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"'`]/g, c => ESC[c]);
   const row = (k, v) => `<span style="opacity:.6">${k}</span><b>${v}</b>`;
   const optLabel = o => o.action === 'BET' ? `Bet ${usd(o.amount)}${o.sizeLabel ? ' · ' + o.sizeLabel : ''}` :
     o.action === 'RAISE' ? `Raise to ${usd(o.amount)}` : o.action === 'CALL' ? `Call ${usd(o.amount)}` :
@@ -169,7 +173,17 @@
   const tabBtn = (id, label, active) => `<button data-pc="${id}" style="all:unset;cursor:pointer;font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;${active ? 'background:rgba(255,255,255,.15);color:#fff' : 'color:#9ca3af'}">${label}</button>`;
   const tabs = () => `<div style="display:flex;gap:4px;margin:-2px 0 8px">${tabBtn('coach', 'Coach', view === 'coach')}${tabBtn('report', 'Report', view === 'report')}</div>`;
 
-  function render(state, r) {
+  // Only rebuild the panel when something it shows has changed. compute() returns the same result
+  // object while nothing changes, so its identity (resultId) is a cheap change signal.
+  let lastRenderKey = '';
+  function renderKey(state, r) {
+    const s = state ? [state.handId, state.heroInHand, state.isHeroTurn, state.street, state.pot, state.toCall, state.heroStack, state.board.join('')].join('|') : 'none';
+    return [view, scope, s, r ? r.resultId : 0, logger.hands().length, tracker.players().length].join('#');
+  }
+  function render(state, r, force = false) {
+    const key = renderKey(state, r);
+    if (!force && key === lastRenderKey) return;
+    lastRenderKey = key;
     const body = view === 'report' ? reportView() : coachView(state, r);
     panel.innerHTML = tabs() + body;
   }
@@ -272,7 +286,7 @@
     else if (id === 'scope-session') scope = 'session';
     else if (id === 'scope-all') scope = 'all';
     else if (id === 'csv') downloadCSV();
-    render(lastState, lastRender);
+    render(lastState, lastRender, true);
   });
   let lastState = null, lastRender = null;
 
@@ -300,10 +314,16 @@
   }
 
   // ─────────────────────────── Loop ───────────────────────────
+  let lastLogSig = '';
   setInterval(() => {
     try {
       const state = window.__coachTestState || A.readState(document);
-      if (!window.__coachTestState) tracker.ingest(A.readLog(document)); // learn from any newly finished hands
+      if (!window.__coachTestState) {
+        // learn from newly finished hands — but only re-parse the log when it has actually changed
+        const items = document.querySelectorAll(A.SEL.logItems);
+        const sig = items.length + '|' + (items.length ? items[items.length - 1].textContent : '');
+        if (sig !== lastLogSig) { lastLogSig = sig; tracker.ingest(A.readLog(document)); }
+      }
       const r = compute(state);
       if (!window.__coachTestState && state) logger.observe(state, r && r.d, { position: r ? r.heroPos : null, bb: r ? r.bb : 0 });
       lastState = state; lastRender = r;
