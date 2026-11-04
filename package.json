@@ -7,7 +7,7 @@
     "test": "test"
   },
   "scripts": {
-    "test": "node test-engine.js && node test/test-adapter.js && node test/test-strategy.js && node test/test-overlay.js"
+    "test": "node test-engine.js && node test/test-adapter.js && node test/test-strategy.js && node test/test-tracker.js && node test/test-overlay.js"
   },
   "repository": {
     "type": "git",

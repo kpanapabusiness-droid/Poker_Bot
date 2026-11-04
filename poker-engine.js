@@ -370,6 +370,23 @@
     return ['CO', 'HJ', 'LJ'][fromCutoff - 1] || 'EP';
   }
 
+  // All 169 starting hands, strongest first (equity vs 1 and 3 random hands, blended for
+  // casual multiway tables). Used to turn "plays 45% of hands" into an actual range.
+  const HAND_RANKING = 'AA,KK,QQ,JJ,TT,99,AKs,88,AQs,AKo,AJs,KQs,ATs,AQo,77,KJs,AJo,KTs,KQo,ATo,QJs,A9s,A8s,QTs,KJo,A7s,66,JTs,K9s,A9o,KTo,A4s,A6s,QJo,Q9s,K8s,A5s,A8o,55,QTo,J9s,A3s,A7o,K7s,A2s,T9s,K6s,K9o,Q8s,JTo,A5o,A6o,K5s,Q9o,J8s,K8o,A4o,K4s,A3o,Q7s,T8s,44,J9o,K7o,K3s,Q6s,K2s,J7s,T9o,98s,A2o,Q5s,Q8o,K6o,J8o,T7s,97s,Q4s,33,K5o,Q3s,Q7o,T8o,T6s,J5s,J6s,K4o,87s,Q2s,Q6o,J7o,K3o,98o,76s,Q5o,96s,J4s,J3s,86s,T7o,K2o,22,T5s,Q4o,J2s,97o,Q3o,87o,95s,J6o,85s,T4s,T6o,65s,75s,J5o,T3s,Q2o,T2s,96o,J4o,54s,64s,94s,76o,93s,86o,92s,84s,J3o,74s,T5o,T4o,53s,J2o,95o,63s,75o,82s,73s,85o,83s,65o,T3o,52s,43s,T2o,54o,62s,74o,64o,94o,42s,93o,72s,84o,92o,32s,53o,73o,83o,63o,43o,82o,52o,42o,72o,62o,32o'.split(',');
+  const _topCache = {};
+  /** The strongest `pct` (0–1) of all starting hands, as combos. */
+  function topRange(pct) {
+    const p = Math.max(0.005, Math.min(1, pct));
+    const key = p.toFixed(3);
+    if (_topCache[key]) return _topCache[key];
+    const out = [];
+    for (const cls of HAND_RANKING) {
+      if (out.length / 1326 >= p) break;
+      out.push(...parseRange(cls));
+    }
+    return (_topCache[key] = out);
+  }
+
   // ─────────────────────── 6b. Postflop range narrowing ───────────────────────
   let _all = null;
   /** Every possible 2-card hand (1326 combos). */
@@ -481,7 +498,7 @@
     // preflop
     RFI_RANGES, rfiRange, positionFromSeat,
     // postflop narrowing
-    allCombos, handFeatures, narrowRange,
+    HAND_RANKING, topRange, allCombos, handFeatures, narrowRange,
     // advice
     advise,
   };

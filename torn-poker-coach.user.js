@@ -1,12 +1,13 @@
 // ==UserScript==
 // @name         Torn Poker Coach
 // @namespace    keanu.poker.coach
-// @version      0.3.0
+// @version      0.4.0
 // @description  Live poker coach for Torn: tells you what to do and how much (value, bluff, semi-bluff), with equity, odds, positions and opponent ranges. Display only — never clicks or acts.
 // @match        https://www.torn.com/page.php?sid=holdem*
 // @require      https://raw.githubusercontent.com/kpanapabusiness-droid/Poker_Bot/main/poker-engine.js
 // @require      https://raw.githubusercontent.com/kpanapabusiness-droid/Poker_Bot/main/torn-adapter.js
 // @require      https://raw.githubusercontent.com/kpanapabusiness-droid/Poker_Bot/main/strategy.js
+// @require      https://raw.githubusercontent.com/kpanapabusiness-droid/Poker_Bot/main/tracker.js
 // @grant        none
 // @run-at       document-idle
 // ==/UserScript==
@@ -18,28 +19,53 @@
 //
 (function () {
   'use strict';
-  const E = window.PokerEngine, A = window.TornAdapter, S = window.PokerStrategy;
-  if (!E || !A || !S) { console.warn('[PokerCoach] engine/adapter/strategy not loaded — check the @require lines.'); return; }
+  const E = window.PokerEngine, A = window.TornAdapter, S = window.PokerStrategy, T = window.PokerTracker;
+  if (!E || !A || !S || !T) { console.warn('[PokerCoach] engine/adapter/strategy/tracker not loaded — check the @require lines.'); return; }
+
+  // ─────────────────────────── Opponent tracker (Phase 3) ───────────────────────────
+  // Learns every player from completed hands in the game log. Saved in this browser (localStorage on torn.com).
+  const STORE_KEY = 'pokerCoachTracker';
+  const tracker = T.create({
+    load: () => { try { return JSON.parse(localStorage.getItem(STORE_KEY) || 'null'); } catch (e) { return null; } },
+    save: d => { try { localStorage.setItem(STORE_KEY, JSON.stringify(d)); } catch (e) {} },
+  });
+  // Console helpers: PokerCoach.stats('name'), PokerCoach.exportStats(), PokerCoach.importStats(obj), PokerCoach.resetStats()
+  window.PokerCoach = {
+    stats: name => tracker.estimate(name),
+    players: () => tracker.players().map(n => ({ name: n, ...summary(tracker.estimate(n)) })),
+    exportStats: () => tracker.exportData(),
+    importStats: d => tracker.importData(d),
+    resetStats: () => tracker.reset(),
+  };
+  const summary = e => ({ type: e.type.label, hands: e.hands, vpip: Math.round(e.vpip * 100), pfr: Math.round(e.pfr * 100), af: +e.af.toFixed(1), f2b: Math.round(e.f2b * 100) });
 
   // ─────────────────────────── Opponent ranges ───────────────────────────
-  // Start from what each opponent did PREFLOP, then narrow on every postflop bet/raise/call.
-  // Starter heuristics — Phase 3 adds per-player stats.
-  const THREE_BET = '99+,AJs+,KQs,AQo+';
-  const FLAT_CALL = '22+,A2s+,K9s+,Q9s+,J9s+,T8s+,97s+,86s+,75s+,65s,54s,ATo+,KJo+,QJo';
-  const rangeCache = {};
-  const parsed = txt => rangeCache[txt] || (rangeCache[txt] = E.parseRange(txt));
+  // Sized from each player's OWN stats (shrunk towards average for strangers), then narrowed
+  // on every postflop bet/raise/call with bluff/float shares matched to how aggressive they are.
+  const POS_WIDTH = { EP: 0.55, LJ: 0.7, HJ: 0.85, CO: 1.05, BTN: 1.4, SB: 1.15, BB: 0.8 };
+  const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+  const without = (combos, remove) => { const k = new Set(remove.map(([a, b]) => a * 52 + b)); return combos.filter(([a, b]) => !k.has(a * 52 + b)); };
 
-  function villainRange(action, position) {
+  function villainRange(action, position, est) {
+    const pfrW = clamp(est.pfr * (POS_WIDTH[position] || 1), 0.03, 0.8);
     switch (action) {
-      case 'raise': return { combos: E.rfiRange(position === 'BB' ? 'SB' : (position && E.RFI_RANGES[position] ? position : 'CO')), label: `opened ${position || ''}` };
-      case '3bet+': return { combos: parsed(THREE_BET), label: '3-bet+' };
-      case 'call': return { combos: parsed(FLAT_CALL), label: 'called a raise' };
-      default: return { combos: null, label: action === 'limp' ? 'limped (any)' : action === 'check' ? 'BB check (any)' : 'any two' };
+      case 'raise': return { combos: E.topRange(pfrW), label: `opened ${position || ''} · top ${Math.round(pfrW * 100)}%` };
+      case '3bet+': { const w = clamp(est.threeBet * 1.3, 0.02, 0.35); return { combos: E.topRange(w), label: `3-bet+ · top ${Math.round(w * 100)}%` }; }
+      case 'call': {
+        const w = clamp(est.vpip, 0.08, 0.85);
+        return { combos: without(E.topRange(w), E.topRange(clamp(est.threeBet * 0.6, 0.01, 0.2))), label: `called a raise · ${Math.round(w * 100)}% player` };
+      }
+      case 'limp': {
+        const w = clamp(est.vpip, 0.1, 0.9);
+        return { combos: without(E.topRange(w), E.topRange(clamp(est.pfr * 0.6, 0.01, 0.25))), label: `limped · ${Math.round(w * 100)}% player` };
+      }
+      default: return { combos: null, label: action === 'check' ? 'BB check (any)' : 'any two' };
     }
   }
 
   const BOARD_LEN = { flop: 3, turn: 4, river: 5 };
-  function applyPostflop(villain, actions, board) {
+  function applyPostflop(villain, actions, board, est) {
+    const opts = { bluffKeep: clamp(0.06 + 0.07 * est.af, 0.06, 0.45), floatKeep: clamp(0.75 - est.f2b, 0.1, 0.6) };
     let street = 'preflop', combos = villain.combos || E.allCombos();
     const steps = [];
     for (const a of actions) {
@@ -48,7 +74,7 @@
       if (!['bet', 'raise', 'allin', 'call'].includes(a.type)) continue;
       const b = board.slice(0, BOARD_LEN[street]);
       if (b.length < BOARD_LEN[street]) continue;
-      combos = E.narrowRange(combos, b, a.type);
+      combos = E.narrowRange(combos, b, a.type, opts);
       steps.push(`${a.type === 'allin' ? 'shove' : a.type} ${street}`);
     }
     if (!steps.length) return villain;
@@ -70,10 +96,12 @@
     const pf = A.preflopActions(state);
     const heroP = state.players.find(p => p.isHero);
     const villains = state.players.filter(p => p.inHand && !p.isHero).map(p => {
-      const r = villainRange(pf[p.name], pos[p.slot]);
-      return applyPostflop({ name: p.name, slot: p.slot, position: pos[p.slot] || '?', stack: p.stack, bet: p.bet, ...r }, state.actions, state.board);
+      const est = tracker.estimate(p.name);
+      const r = villainRange(pf[p.name], pos[p.slot], est);
+      return applyPostflop({ name: p.name, slot: p.slot, position: pos[p.slot] || '?', stack: p.stack, bet: p.bet,
+        est, foldOverride: est.f2b, ...r }, state.actions, state.board, est);
     });
-    const key = [state.handId, state.heroCards, state.board, state.pot, state.toCall, state.heroStack, villains.map(v => v.name + v.label + v.bet)].join('|');
+    const key = [state.handId, state.heroCards, state.board, state.pot, state.toCall, state.heroStack, villains.map(v => v.name + v.label + v.bet + v.est.hands)].join('|');
     if (key === lastKey) return lastResult; // only recompute when something changed
     lastKey = key;
 
@@ -148,11 +176,27 @@
       ${opts ? `<div style="margin-top:8px;border-top:1px solid rgba(255,255,255,.1);padding-top:6px;font-size:11px">
         <div style="opacity:.5;margin-bottom:2px">Options (EV)</div>${opts}</div>` : ''}
       <div style="margin-top:8px;border-top:1px solid rgba(255,255,255,.1);padding-top:6px;font-size:11px">
-        ${r.villains.map(v => `<div style="display:flex;justify-content:space-between;gap:6px">
-          <span>${esc(v.name)} <span style="opacity:.55">${esc(v.position)}</span></span>
-          <span style="opacity:.75">${esc(v.label)}${v.combos ? ' · ' + pct(E.rangePercent(v.combos)) : ''}</span></div>`).join('') || '<span style="opacity:.6">No opponents</span>'}
+        ${r.villains.map(v => {
+          const e = v.est, t = e.type, tc = TYPE_COLORS[t.short] || '#94a3b8';
+          return `<div style="margin-bottom:4px">
+            <div style="display:flex;justify-content:space-between;gap:6px">
+              <span>${esc(v.name)} <span style="opacity:.55">${esc(v.position)}</span>
+                <span style="font-size:9px;font-weight:700;color:${tc};margin-left:3px">${esc(t.short)}</span></span>
+              <span style="opacity:.6">${e.hands ? `VPIP ${pct(e.vpip)} · PFR ${pct(e.pfr)} · F2B ${pct(e.f2b)} · n${e.hands}` : 'new player'}</span></div>
+            <div style="opacity:.6;font-size:10px">${esc(v.label)}${v.combos ? ' → ' + pct(E.rangePercent(v.combos)) + ' of hands' : ''}</div></div>`;
+        }).join('') || '<span style="opacity:.6">No opponents</span>'}
       </div>
-      <div style="font-size:10px;opacity:.4;margin-top:6px">Starter model: casual-player fold rates · ranges from this hand's actions</div>`;
+      ${headsUpNote(r)}
+      <div style="font-size:10px;opacity:.4;margin-top:6px">${tracker.players().length} players tracked · strangers start as average casual players</div>`;
+  }
+
+  const TYPE_COLORS = { STATION: '#22c55e', FISH: '#22c55e', MANIAC: '#ef4444', NIT: '#38bdf8', ROCK: '#38bdf8', TAG: '#f59e0b', LAG: '#f97316', AVG: '#94a3b8', '?': '#6b7280' };
+  function headsUpNote(r) {
+    if (r.villains.length !== 1) return '';
+    const t = r.villains[0].est.type;
+    if (t.short === '?' || t.short === 'AVG') return '';
+    return `<div style="margin-top:6px;font-size:11px;padding:4px 6px;border-radius:4px;background:rgba(255,255,255,.05)">
+      <b>vs ${esc(t.label)}:</b> ${esc(t.note)}</div>`;
   }
 
   function makeDraggable(el) {
@@ -172,6 +216,7 @@
   setInterval(() => {
     try {
       const state = window.__coachTestState || A.readState(document);
+      if (!window.__coachTestState) tracker.ingest(A.readLog(document)); // learn from any newly finished hands
       render(state, compute(state));
     } catch (e) { console.warn('[PokerCoach]', e); }
   }, 400);

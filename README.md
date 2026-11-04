@@ -11,6 +11,7 @@ A live poker coaching overlay. It shows the numbers you forget mid-hand: equity,
 | `poker-engine.js` | Core maths: hand evaluator, range parser, Monte Carlo equity, pot odds / EV / MDF / SPR, starter preflop ranges, `advise()`. No dependencies. Runs in Node and the browser. |
 | `torn-adapter.js` | Reads Torn's poker table: your cards, board, pot, amount to call, seats, dealer, and the action log. Read-only. |
 | `strategy.js` | The decision layer, which tells you exactly what to do and how much. Preflop it uses position charts (open, limp behind, 3-bet for value or as a bluff, call, 4-bet, fold) and switches to push/fold at 12bb or less. Postflop it compares the EV of fold, check, call, bet ⅓ / ½ / ¾ / pot, raise and all-in, using opponent ranges and a fold-equity model. Every recommendation is tagged VALUE, PROTECTION, SEMI-BLUFF or BLUFF. |
+| `tracker.js` | Learns every opponent from finished hands in the game log. It tracks VPIP, PFR, 3-bet %, aggression, fold-to-bet, went-to-showdown and shown hands. Small samples are blended towards an average casual player. Players get labelled Calling Station / Maniac / Fish / Nit / Rock / TAG / LAG / Average. Stats are saved in your browser. |
 | `torn-poker-coach.user.js` | Tampermonkey overlay showing the exact action and size, why, the tag, fold needed vs expected (for bluffs), every option's EV, equity, SPR, IP/OOP, positions and each opponent's estimated range. |
 | `test-engine.js`, `test/` | Tests. `test/fixtures/` holds real (anonymised) Torn table snapshots. |
 | `docs/poker-coach-plan.md` | Full build plan, decisions, phases and next steps |
@@ -40,7 +41,14 @@ E.advise({ equity: 0.41, pot: 150, toCall: 50 });
 
 **How it decides when to bluff:** a bluff works when the opponent folds often enough. A ½-pot bet needs folds 33% of the time to break even. The coach estimates how often a typical casual player folds to each bet size, works out what you win when they fold and your equity when they call, and only recommends a bluff when the maths says it's profitable. All fold rates are starter defaults (`MODEL` in `strategy.js`). Phase 3 replaces them with each opponent's real fold stats.
 
-**How ranges work (for now):** each opponent starts from what they did preflop (opened, 3-bet, called a raise, limped). The range then narrows on every bet, raise or call after the flop. These are starter heuristics; Phase 3 adds per-player stats.
+**How it learns opponents (Phase 3):** every finished hand in the game log updates each player's stats. Their range is then sized to *their* tendencies: a 60% VPIP player who limps has a much wider range than a 15% player. The range narrows on each postflop action, and aggressive players are given more bluffs. Their own fold-to-bet rate drives the bluff maths, so it won't bluff calling stations and bluffs more against players who fold too much. Strangers start as an average casual player (VPIP 40%, PFR 12%, folds to bets 40%) and move towards their real numbers as hands accumulate. A player type label appears after about 15 hands.
+
+**Your stats data** lives in your browser on torn.com. In the console:
+- `PokerCoach.players()` lists everyone tracked.
+- `PokerCoach.stats('name')` shows one player's details.
+- `PokerCoach.exportStats()` gives you a backup.
+- `PokerCoach.importStats(obj)` restores a backup.
+- `PokerCoach.resetStats()` clears everything.
 
 ## Ground rules
 

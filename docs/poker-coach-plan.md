@@ -11,7 +11,23 @@
 - **Postflop:** the EV of every option (fold, check, call, 4 bet sizes, raises, all-in) using ranges and a fold-equity model. Each recommendation is tagged VALUE / PROTECTION / SEMI-BLUFF / BLUFF, and bluffs show the fold % needed vs the fold % expected.
 - **Tests:** 120 pass (engine 51, adapter 45, strategy 24 textbook spots), plus the overlay on every snapshot.
 
-**Next:** play real hands with it, note any bad advice or misreads, then Phase 3, which replaces the default fold rates and ranges with each opponent's real stats.
+**Update (4 Nov, night) — Phase 3 done (overlay v0.4):** `tracker.js` learns each opponent from finished hands.
+- **What it tracks:** VPIP, PFR, 3-bet %, aggression, fold-to-bet, went-to-showdown and shown hands.
+- **Small samples:** blended towards the average casual player until there are enough hands.
+- **Player types:** Calling Station / Maniac / Fish / Nit / Rock / TAG / LAG / Average, after 15+ hands.
+- **What it changes:**
+  - Preflop ranges come from the player's own stats, using a 169-hand strength ranking (`topRange(pct)` in the engine).
+  - Postflop bluff and float shares follow their aggression and fold-to-bet.
+  - Their own fold-to-bet feeds the bluff EV.
+- **Panel:** shows type, VPIP / PFR / F2B / hands for each opponent, plus a "vs <type>" tip when heads-up.
+- **Stats storage:** saved in localStorage, with console helpers for export, import and reset.
+- **Tests:** 138 pass (engine 51, adapter 45, strategy 24, tracker 18). The same river spot with nothing → check vs a calling station, bluff vs a nit.
+
+**Next:** play sessions so the tracker builds up data, report any bad advice, then pick from:
+- a 13×13 range grid in the panel
+- a session log and EV dashboard (Phase 5's learning loop)
+- the Claude review connector
+- the PokerNow adapter for the friends' game
 
 **Torn table facts (verified from snapshots):**
 - URL `torn.com/page.php?sid=holdem`
@@ -76,7 +92,7 @@
 | 1 | **Core engine** | Hand evaluator, range parser, Monte Carlo equity, pot odds/EV/MDF/SPR, starter preflop ranges, `advise()` | 1 weekend | ✅ Done |
 | 2 | **Torn overlay** | Tampermonkey script reads the table and shows a draggable panel (action, equity, needed equity, pot odds, call EV, SPR, positions, opponent ranges) | 1 weekend | ✅ Done; ready for live testing |
 | 2.5 | **Decision layer** | Exact action and size. Preflop charts and push/fold. Postflop EV across fold/check/call/bet sizes/raise/all-in with a fold-equity model. VALUE / PROTECTION / SEMI-BLUFF / BLUFF tags. | 1 evening | ✅ Done |
-| 3 | **Opponent tracker + range narrowing** | Per-player action log in IndexedDB. Stats: VPIP (how often they put money in voluntarily), PFR (how often they raise preflop), aggression, fold-to-c-bet. Start everyone at average casual-player stats and shift towards their own numbers as hands accumulate. Narrow ranges street by street. 13×13 range grid in the panel. | 1–2 weekends | ⬜ |
+| 3 | **Opponent tracker + range narrowing** | Per-player action log in IndexedDB. Stats: VPIP (how often they put money in voluntarily), PFR (how often they raise preflop), aggression, fold-to-c-bet. Start everyone at average casual-player stats and shift towards their own numbers as hands accumulate. Narrow ranges street by street. 13×13 range grid in the panel. | 1–2 weekends | ✅ Done (except the range grid) |
 | 4 | **Solver integration** | Plug in an open-source solver (TexasSolver / postflop-solver; check they're still maintained). Cache common spots. Replace starter preflop ranges with solver charts. | 2–3 weekends | ⬜ |
 | 5 | **Exploit + learning loop** | Node-locking against tracked opponents (tell the solver "this player never bluffs the river" and get the best counter). Log recommendation vs your action vs result. Measure by EV, not raw results. Dashboard. Optional GTO Wizard benchmark. | Ongoing | ⬜ |
 | + | **Claude layer** | MCP server over the hand DB: `session_summary`, `find_leaks`, `biggest_losing_hands`, `review_hand(id)`. Plus an "explain this spot" button. | 1 weekend (alongside 3+) | ⬜ |
