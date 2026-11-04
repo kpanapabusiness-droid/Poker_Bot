@@ -16,7 +16,7 @@ const L=require('../logger.js');
   w.localStorage.setItem('pokerCoachHands', JSON.stringify(d));
   for (const f of ['poker-engine.js','torn-adapter.js','strategy.js','tracker.js','logger.js','torn-poker-coach.user.js']) w.eval(src(f));
   await new Promise(r=>setTimeout(r,1500));
-  const p=w.document.getElementById('poker-coach-panel');
+  const p=w.document.getElementById('poker-coach-host').shadowRoot.getElementById('poker-coach-panel');
   console.log('COACH:', p.textContent.replace(/\s+/g,' ').slice(0,90), '...', (p.textContent.match(/Session:[^·]*·[^·]*·[^\n]*/)||[''])[0].replace(/\s+/g,' ').slice(0,60));
   p.querySelector('[data-pc="report"]').click();
   console.log('REPORT:', p.textContent.replace(/\s+/g,' ').slice(0,520));

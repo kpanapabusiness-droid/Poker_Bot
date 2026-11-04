@@ -22,7 +22,7 @@ function check(name, cond, info = '') {
   w.console.warn = (...a) => errs.push(a.join(' '));
   for (const f of ['poker-engine.js', 'torn-adapter.js', 'strategy.js', 'tracker.js', 'logger.js', 'torn-poker-coach.user.js']) w.eval(src(f));
   await new Promise(r => setTimeout(r, 1500));
-  const panel = w.document.getElementById('poker-coach-panel');
+  const panel = w.document.getElementById('poker-coach-host').shadowRoot.getElementById('poker-coach-panel');
 
   console.log('\nBooby-trapped player name');
   check('Panel rendered', !!panel && /CALL|RAISE|FOLD/.test(panel.textContent));

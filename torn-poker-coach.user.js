@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn Poker Coach
 // @namespace    keanu.poker.coach
-// @version      0.5.1
+// @version      0.6.0
 // @description  Live poker coach for Torn: tells you what to do and how much (value, bluff, semi-bluff), with equity, odds, positions and opponent ranges. Display only — never clicks or acts.
 // @match        https://www.torn.com/page.php?sid=holdem*
 // @require      https://raw.githubusercontent.com/kpanapabusiness-droid/Poker_Bot/main/poker-engine.js
@@ -138,8 +138,10 @@
       heroName: heroP && heroP.name, actions: state.actions, villains,
     };
     const d = S.decide(ctx);
-    const eff = Math.min(state.heroStack + state.heroBet, Math.max(0, ...villains.map(v => v.stack + v.bet)) || Infinity);
-    lastResult = { resultId: ++resultSeq, d, villains, heroPos: pos[0] || '?', inPosition, bb, spr: state.pot ? eff / state.pot : null,
+    // Effective stack = what's still playable between hero and the deepest opponent. An opponent who is
+    // all-in has 0 behind, which correctly gives SPR 0 (no more betting) rather than falling back to hero's stack.
+    const eff = villains.length ? Math.min(state.heroStack + state.heroBet, Math.max(...villains.map(v => (v.stack || 0) + (v.bet || 0)))) : null;
+    lastResult = { resultId: ++resultSeq, d, villains, heroPos: pos[0] || '?', inPosition, bb, spr: eff != null && state.pot ? eff / state.pot : null,
       handClass: E.handClass(ctx.hero) };
     return lastResult;
   }
@@ -148,12 +150,34 @@
   const ACTION_COLORS = { RAISE: '#3b82f6', BET: '#3b82f6', 'ALL-IN': '#a855f7', CALL: '#22c55e', CHECK: '#a3a3a3', FOLD: '#ef4444' };
   const TAG_COLORS = { VALUE: '#22c55e', 'SEMI-BLUFF': '#f59e0b', BLUFF: '#f97316', PROTECTION: '#38bdf8', 'POT CONTROL': '#a3a3a3',
     CALL: '#22c55e', FOLD: '#ef4444', CHECK: '#a3a3a3', CHART: '#94a3b8', 'PUSH/FOLD': '#a855f7' };
+  // The panel lives in a shadow root so Torn's stylesheets can't restyle it (and ours can't leak onto Torn).
+  // This is for CSS isolation only — it hides nothing; the host element is a normal, visible part of the page.
+  const host = document.createElement('div');
+  host.id = 'poker-coach-host';
+  document.body.appendChild(host);
+  const shadow = host.attachShadow({ mode: 'open' });
   const panel = document.createElement('div');
   panel.id = 'poker-coach-panel';
-  panel.style.cssText = 'position:fixed;top:110px;right:16px;z-index:99999;width:270px;padding:12px 14px;border-radius:10px;' +
+  panel.style.cssText = 'position:fixed;top:110px;right:16px;z-index:99999;width:270px;padding:12px 14px;border-radius:10px;box-sizing:border-box;' +
     'background:rgba(15,17,21,.94);color:#e5e7eb;font:13px/1.4 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.4);cursor:move;user-select:none;';
-  try { const p = JSON.parse(localStorage.getItem('pokerCoachPos') || 'null'); if (p) { panel.style.left = p.left; panel.style.top = p.top; panel.style.right = 'auto'; } } catch (e) {}
-  document.body.appendChild(panel);
+  shadow.appendChild(panel);
+
+  // Keep the panel on-screen: at least its full width and a grab-able strip at the top stay visible.
+  const GRAB = 40;
+  function placePanel(left, top) {
+    const w = panel.offsetWidth || 270;
+    panel.style.left = clamp(left, 0, Math.max(0, window.innerWidth - w)) + 'px';
+    panel.style.top = clamp(top, 0, Math.max(0, window.innerHeight - GRAB)) + 'px';
+    panel.style.right = 'auto';
+  }
+  try {
+    const p = JSON.parse(localStorage.getItem('pokerCoachPos') || 'null');
+    if (p && isFinite(parseFloat(p.left)) && isFinite(parseFloat(p.top))) placePanel(parseFloat(p.left), parseFloat(p.top));
+  } catch (e) {}
+  window.addEventListener('resize', () => {
+    if (panel.style.right !== 'auto') return; // still at the default top-right spot
+    placePanel(parseFloat(panel.style.left) || 0, parseFloat(panel.style.top) || 0);
+  });
   makeDraggable(panel);
 
   // Formatting + escaping. Everything that comes from the page (player names, log text, cards) goes
@@ -304,7 +328,7 @@
     el.addEventListener('mousedown', e => {
       if (e.target.closest('button')) return; // let tab/CSV buttons click
       sx = e.clientX; sy = e.clientY; const b = el.getBoundingClientRect(); ox = b.left; oy = b.top;
-      const move = ev => { el.style.left = ox + ev.clientX - sx + 'px'; el.style.top = oy + ev.clientY - sy + 'px'; el.style.right = 'auto'; };
+      const move = ev => placePanel(ox + ev.clientX - sx, oy + ev.clientY - sy);
       const up = () => {
         document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up);
         try { localStorage.setItem('pokerCoachPos', JSON.stringify({ left: el.style.left, top: el.style.top })); } catch (e) {}
