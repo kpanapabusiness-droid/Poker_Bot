@@ -33,7 +33,7 @@ E.advise({ equity: 0.41, pot: 150, toCall: 50 });
 ## Using the overlay
 
 1. Install Tampermonkey in Chrome, and turn on **Allow user scripts** for it (chrome://extensions → Tampermonkey → Details).
-2. Open https://raw.githubusercontent.com/kpanapabusiness-droid/Poker_Bot/main/torn-poker-coach.user.js and Tampermonkey will offer to install it. Its header loads `poker-engine.js` and `torn-adapter.js` from this repo.
+2. Open https://raw.githubusercontent.com/kpanapabusiness-droid/Poker_Bot/main/torn-poker-coach.user.js and Tampermonkey will offer to install it. Its header loads `poker-engine.js`, `torn-adapter.js` and `strategy.js` from this repo.
 3. Go to Torn poker and sit at a table. The panel appears top-right and can be dragged anywhere; it remembers where you put it.
 
 **Updating:** Tampermonkey caches `@require` files. After an update, open the script in the Tampermonkey dashboard → Externals tab and refresh, or bump `@version`.
