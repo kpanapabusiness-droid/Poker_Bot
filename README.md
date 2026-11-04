@@ -9,14 +9,16 @@ A live poker coaching overlay. It shows the numbers you forget mid-hand: equity,
 | File | What it is |
 |---|---|
 | `poker-engine.js` | Core maths: hand evaluator, range parser, Monte Carlo equity, pot odds / EV / MDF / SPR, starter preflop ranges, `advise()`. No dependencies. Runs in Node and the browser. |
-| `test-engine.js` | Tests. Run `node test-engine.js` |
-| `torn-poker-coach.user.js` | Tampermonkey overlay for Torn. The site adapter's selectors are still to be filled in. |
+| `torn-adapter.js` | Reads Torn's poker table: your cards, board, pot, amount to call, seats, dealer, and the action log. Read-only. |
+| `torn-poker-coach.user.js` | Tampermonkey overlay: shows the action, equity, needed equity, pot odds, call EV, SPR, positions and each opponent's estimated range. |
+| `test-engine.js`, `test/` | Tests. `test/fixtures/` holds real (anonymised) Torn table snapshots. |
 | `docs/poker-coach-plan.md` | Full build plan, decisions, phases and next steps |
 
 ## Quick start
 
 ```bash
-node test-engine.js
+npm install   # only needed for the adapter/overlay tests (jsdom)
+npm test      # engine + Torn adapter + full overlay against real snapshots
 ```
 
 ```js
@@ -29,10 +31,13 @@ E.advise({ equity: 0.41, pot: 150, toCall: 50 });
 
 ## Using the overlay
 
-1. Install Tampermonkey in Chrome.
-2. Create a new script and paste in `torn-poker-coach.user.js`. Its header loads the engine via:
-   `// @require https://raw.githubusercontent.com/kpanapabusiness-droid/Poker_Bot/main/poker-engine.js`
-3. See `docs/poker-coach-plan.md` for testing the panel before the Torn adapter is wired up.
+1. Install Tampermonkey in Chrome, and turn on **Allow user scripts** for it (chrome://extensions → Tampermonkey → Details).
+2. Open https://raw.githubusercontent.com/kpanapabusiness-droid/Poker_Bot/main/torn-poker-coach.user.js and Tampermonkey will offer to install it. Its header loads `poker-engine.js` and `torn-adapter.js` from this repo.
+3. Go to Torn poker and sit at a table. The panel appears top-right and can be dragged anywhere; it remembers where you put it.
+
+**Updating:** Tampermonkey caches `@require` files. After an update, open the script in the Tampermonkey dashboard → Externals tab and refresh, or bump `@version`.
+
+**How ranges work (for now):** each opponent starts from what they did preflop (opened, 3-bet, called a raise, limped). The range then narrows on every bet, raise or call after the flop. These are starter heuristics; Phase 3 adds per-player stats.
 
 ## Ground rules
 

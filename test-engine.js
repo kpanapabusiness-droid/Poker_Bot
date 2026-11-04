@@ -72,5 +72,22 @@ check('Advise RAISE at 80%', E.advise({ equity: 0.8, pot: 150, toCall: 50 }).act
 check('Positions 6-handed', ['BTN', 'SB', 'BB', 'LJ', 'HJ', 'CO'].every((p, i) => E.positionFromSeat(i, 6) === p));
 check('Positions 9-handed: seat 3 = EP', E.positionFromSeat(3, 9) === 'EP' && E.positionFromSeat(8, 9) === 'CO');
 
+console.log('\nPostflop narrowing');
+const F = (h, b) => E.handFeatures(E.parseCards(h), E.parseCards(b));
+check('Flush draw detected', F('KhQh', '4hAhTc').flushDraw);
+check('Open-ended straight draw detected', F('6d7d', '4h5sTc').straightDraw);
+check('Top pair counts as top-pair-plus', F('AsKd', 'Ah7c2d').topPairPlus);
+check('Bottom pair is improved but not top-pair-plus', F('2s3d', 'Ah7c2d').improved && !F('2s3d', 'Ah7c2d').topPairPlus);
+check('Overpair counts as top-pair-plus', F('KsKd', 'Qh7c2d').topPairPlus);
+check('Pair on a paired board alone is not improved', !F('9s6d', 'Ah8c8d').improved);
+check('Heads-up: button is BTN, other is BB', E.positionFromSeat(0, 2) === 'BTN' && E.positionFromSeat(1, 2) === 'BB');
+const all = E.allCombos();
+check('1326 combos total', all.length === 1326);
+const riverBet = E.narrowRange(all, '4hAhTc3c5c', 'bet');
+const flopCall = E.narrowRange(all, '4hAhTc', 'call');
+check('River bet narrows range well below half', riverBet.length / 1326 < 0.5, (riverBet.length / 1326).toFixed(2));
+check('Flop call keeps a wider range than a river bet', flopCall.length > riverBet.length, [flopCall.length, riverBet.length]);
+check('Narrowed range never overlaps the board', riverBet.every(([a, b]) => !E.parseCards('4hAhTc3c5c').includes(a) && !E.parseCards('4hAhTc3c5c').includes(b)));
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

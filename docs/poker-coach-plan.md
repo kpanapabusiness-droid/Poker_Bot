@@ -4,7 +4,16 @@
 
 **Why build it:** a learning tool, and a portfolio piece for data analytics roles. It covers probability, Bayesian modelling, data pipelines, SQL, and judging decisions by expected value (EV) instead of results. It isn't a business: GTO Wizard, PokerTracker and Hold'em Manager already own that market.
 
-**Status (4 Nov 2026):** Phase 1 engine built and tested (40/40 tests passing). Torn overlay skeleton written. Next step: capture Torn's poker table HTML so the adapter can be wired up.
+**Status (4 Nov 2026, evening):** Phases 1 and 2 are done. The Torn table reader (`torn-adapter.js`) was built from 6 real table snapshots and reads cards, board, pot, amount to call, seats, dealer, positions and the action log. The overlay shows the action, equity, needed equity, pot odds, call EV, SPR and per-opponent ranges, narrowed by preflop and postflop actions. 96 tests pass (engine 51, adapter 45), plus a full overlay run against every snapshot. **Next:** install it in Tampermonkey, play real hands, note anything it misreads, and start Phase 3 (per-player stats across hands).
+
+**Torn table facts (verified from snapshots):**
+- URL `torn.com/page.php?sid=holdem`
+- Tables come in 2, 4, 6 and 9 seats, plus tournaments
+- Hero = slot 0, opponents = `playerPositioner-1..8` clockwise, and action goes in ascending slot order
+- The dealer marker is `dealer___ position-N` and bets are `player-pot-N`, using the same numbering
+- `POT:` includes current-street bets
+- The game log has every action as text, and each hand starts with a "Game <id> started" line
+- Class names have hashes that change on redeploy, so the adapter matches on prefixes only
 
 ---
 
@@ -58,7 +67,7 @@
 | # | Phase | Deliverable | Est. (with Claude coding) | Status |
 |---|---|---|---|---|
 | 1 | **Core engine** | Hand evaluator, range parser, Monte Carlo equity, pot odds/EV/MDF/SPR, starter preflop ranges, `advise()` | 1 weekend | ✅ Done |
-| 2 | **Torn overlay** | Tampermonkey script reads the table and shows a draggable panel (action, equity, needed equity, pot odds, call EV) | 1 weekend | 🟡 Skeleton written; selectors still to fill in |
+| 2 | **Torn overlay** | Tampermonkey script reads the table and shows a draggable panel (action, equity, needed equity, pot odds, call EV, SPR, positions, opponent ranges) | 1 weekend | ✅ Done; ready for live testing |
 | 3 | **Opponent tracker + range narrowing** | Per-player action log in IndexedDB. Stats: VPIP (how often they put money in voluntarily), PFR (how often they raise preflop), aggression, fold-to-c-bet. Start everyone at average casual-player stats and shift towards their own numbers as hands accumulate. Narrow ranges street by street. 13×13 range grid in the panel. | 1–2 weekends | ⬜ |
 | 4 | **Solver integration** | Plug in an open-source solver (TexasSolver / postflop-solver; check they're still maintained). Cache common spots. Replace starter preflop ranges with solver charts. | 2–3 weekends | ⬜ |
 | 5 | **Exploit + learning loop** | Node-locking against tracked opponents (tell the solver "this player never bluffs the river" and get the best counter). Log recommendation vs your action vs result. Measure by EV, not raw results. Dashboard. Optional GTO Wizard benchmark. | Ongoing | ⬜ |

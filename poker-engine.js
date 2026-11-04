@@ -354,11 +354,83 @@
   /** Map seat distance from the button to a position label. seatsFromButton: 0 = BTN, 1 = SB, 2 = BB, ... */
   function positionFromSeat(seatsFromButton, playersAtTable) {
     const n = playersAtTable;
+    if (n === 2) return seatsFromButton === 0 ? 'BTN' : 'BB'; // heads-up: button posts the small blind
     if (seatsFromButton === 0) return 'BTN';
     if (seatsFromButton === 1) return 'SB';
     if (seatsFromButton === 2) return 'BB';
     const fromCutoff = n - seatsFromButton; // 1 = CO, 2 = HJ, 3 = LJ, 4+ = EP
     return ['CO', 'HJ', 'LJ'][fromCutoff - 1] || 'EP';
+  }
+
+  // ─────────────────────── 6b. Postflop range narrowing ───────────────────────
+  let _all = null;
+  /** Every possible 2-card hand (1326 combos). */
+  function allCombos() {
+    if (_all) return _all;
+    _all = [];
+    for (let a = 0; a < 52; a++) for (let b = a + 1; b < 52; b++) _all.push([a, b]);
+    return _all;
+  }
+
+  function straightOuts(mask) {
+    const have = straightHigh(mask);
+    let n = 0;
+    for (let r = 2; r <= 14; r++) if (!(mask & (1 << r)) && straightHigh(mask | (1 << r)) > have) n++;
+    return n;
+  }
+
+  /**
+   * What a hand has on this board: does it improve on the board itself (pair or better using
+   * a hole card), and does it hold a flush draw or straight draw (flop/turn only)?
+   */
+  function handFeatures(hand, board) {
+    const cards = [...hand, ...board];
+    const catFull = categoryOf(evaluate(cards));
+    const catBoard = board.length ? categoryOf(evaluate(board)) : 0;
+    const improved = catFull > catBoard;
+    // Top pair or better: two pair+ using a hole card, an overpair, or pairing the board's top card.
+    const maxBoard = board.length ? Math.max(...board.map(rankOf)) : 0;
+    const hr = hand.map(rankOf), boardRanks = new Set(board.map(rankOf));
+    let pairRank = 0;
+    if (hr[0] === hr[1]) pairRank = hr[0];
+    else for (const r of hr) if (boardRanks.has(r)) pairRank = Math.max(pairRank, r);
+    const topPairPlus = improved && (catFull >= 2 || pairRank >= maxBoard);
+    let flushDraw = false, straightDraw = false;
+    if (board.length && board.length < 5) {
+      const sc = [0, 0, 0, 0];
+      cards.forEach(c => sc[suitOf(c)]++);
+      flushDraw = hand.some(c => sc[suitOf(c)] === 4);
+      const mask = cs => cs.reduce((m, c) => m | (1 << rankOf(c)), 0);
+      straightDraw = catFull < 4 && straightOuts(mask(cards)) >= 2 && straightOuts(mask(cards)) > straightOuts(mask(board));
+    }
+    return { improved, topPairPlus, made: catFull, flushDraw, straightDraw, draw: flushDraw || straightDraw };
+  }
+
+  /**
+   * Narrow a range after a postflop action on a given board. Starter heuristics, tune with data:
+   *  flop bet/raise:        any pair-or-better using a hole card, or a draw  (+ bluffKeep share of the rest)
+   *  turn/river bet/raise:  top pair or better, or a draw on the turn        (+ bluffKeep share of the rest)
+   *  any call:              any pair-or-better using a hole card, or a draw  (+ floatKeep share of the rest)
+   * Deterministic (keeps every Nth weak combo) so results are stable between refreshes.
+   */
+  function narrowRange(combos, board, action, opts = {}) {
+    const bluffKeep = opts.bluffKeep ?? 0.2, floatKeep = opts.floatKeep ?? 0.33;
+    const b = parseCards(board);
+    const used = new Set(b);
+    const aggressive = /bet|raise|allin/.test(action);
+    const keepShare = aggressive ? bluffKeep : action === 'call' ? floatKeep : 1;
+    if (keepShare >= 1) return combos;
+    const every = Math.max(1, Math.round(1 / keepShare));
+    const lateStreet = b.length >= 4;
+    let weakSeen = 0;
+    const out = combos.filter(([x, y]) => {
+      if (used.has(x) || used.has(y)) return false;
+      const f = handFeatures([x, y], b);
+      const strong = aggressive && lateStreet ? (f.topPairPlus || (b.length < 5 && f.draw)) : (f.improved || f.draw);
+      if (strong) return true;
+      return (weakSeen++ % every) === 0;
+    });
+    return out.length ? out : combos;
   }
 
   // ───────────────────────────── 7. Advice ─────────────────────────────
@@ -400,6 +472,8 @@
     potOdds, callEV, mdf, bluffBreakeven, spr, outsToEquity,
     // preflop
     RFI_RANGES, rfiRange, positionFromSeat,
+    // postflop narrowing
+    allCombos, handFeatures, narrowRange,
     // advice
     advise,
   };
