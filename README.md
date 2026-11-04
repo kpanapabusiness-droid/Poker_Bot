@@ -34,12 +34,12 @@ E.advise({ equity: 0.41, pot: 150, toCall: 50 });
 ## Using the overlay
 
 1. Install Tampermonkey in Chrome, and turn on **Allow user scripts** for it (chrome://extensions → Tampermonkey → Details).
-2. Open https://raw.githubusercontent.com/kpanapabusiness-droid/Poker_Bot/main/torn-poker-coach.user.js and Tampermonkey will offer to install it. Its header loads `poker-engine.js`, `torn-adapter.js` and `strategy.js` from this repo.
+2. Open https://raw.githubusercontent.com/kpanapabusiness-droid/Poker_Bot/main/torn-poker-coach.user.js and Tampermonkey will offer to install it. Its header loads `poker-engine.js`, `torn-adapter.js`, `strategy.js` and `tracker.js` from this repo.
 3. Go to Torn poker and sit at a table. The panel appears top-right and can be dragged anywhere; it remembers where you put it.
 
 **Updating:** Tampermonkey caches `@require` files. After an update, open the script in the Tampermonkey dashboard → Externals tab and refresh, or bump `@version`.
 
-**How it decides when to bluff:** a bluff works when the opponent folds often enough. A ½-pot bet needs folds 33% of the time to break even. The coach estimates how often a typical casual player folds to each bet size, works out what you win when they fold and your equity when they call, and only recommends a bluff when the maths says it's profitable. All fold rates are starter defaults (`MODEL` in `strategy.js`). Phase 3 replaces them with each opponent's real fold stats.
+**How it decides when to bluff:** a bluff works when the opponent folds often enough. A ½-pot bet needs folds 33% of the time to break even. The coach estimates how often a typical casual player folds to each bet size, works out what you win when they fold and your equity when they call, and only recommends a bluff when the maths says it's profitable. For strangers it uses default fold rates (`MODEL` in `strategy.js`). Once a player has been tracked, it uses their real fold-to-bet rate instead (see below).
 
 **How it learns opponents (Phase 3):** every finished hand in the game log updates each player's stats. Their range is then sized to *their* tendencies: a 60% VPIP player who limps has a much wider range than a 15% player. The range narrows on each postflop action, and aggressive players are given more bluffs. Their own fold-to-bet rate drives the bluff maths, so it won't bluff calling stations and bluffs more against players who fold too much. Strangers start as an average casual player (VPIP 40%, PFR 12%, folds to bets 40%) and move towards their real numbers as hands accumulate. A player type label appears after about 15 hands.
 

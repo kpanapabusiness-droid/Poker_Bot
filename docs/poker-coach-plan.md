@@ -145,7 +145,7 @@ Snapshots contain other players' names. Before committing them, anonymise them t
 **Known limits to fix later:**
 - Equity is "showdown equity": it ignores future betting and implied odds.
 - Preflop ranges are approximations.
-- Narrowing ignores bet size and reads every player the same way. Phase 3 fixes this with per-player stats.
+- Narrowing ignores bet size. Since Phase 3 it does adjust bluff and float shares per player.
 - `advise()` uses fixed thresholds.
 - Tournaments (ICM) aren't modelled.
 
