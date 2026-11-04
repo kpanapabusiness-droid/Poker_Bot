@@ -4,7 +4,14 @@
 
 **Why build it:** a learning tool, and a portfolio piece for data analytics roles. It covers probability, Bayesian modelling, data pipelines, SQL, and judging decisions by expected value (EV) instead of results. It isn't a business: GTO Wizard, PokerTracker and Hold'em Manager already own that market.
 
-**Status (4 Nov 2026, evening):** Phases 1 and 2 are done. The Torn table reader (`torn-adapter.js`) was built from 6 real table snapshots and reads cards, board, pot, amount to call, seats, dealer, positions and the action log. The overlay shows the action, equity, needed equity, pot odds, call EV, SPR and per-opponent ranges, narrowed by preflop and postflop actions. 96 tests pass (engine 51, adapter 45), plus a full overlay run against every snapshot. **Next:** install it in Tampermonkey, play real hands, note anything it misreads, and start Phase 3 (per-player stats across hands).
+**Status (4 Nov 2026, evening):** Phases 1 and 2 are done. The Torn table reader (`torn-adapter.js`) was built from 6 real table snapshots and reads cards, board, pot, amount to call, seats, dealer, positions and the action log. The overlay shows the action, equity, needed equity, pot odds, call EV, SPR and per-opponent ranges, narrowed by preflop and postflop actions. 96 tests pass (engine 51, adapter 45), plus a full overlay run against every snapshot.
+
+**Update (4 Nov, later):** a decision layer (`strategy.js`, overlay v0.3) now tells you the exact action and size, such as "RAISE to $90", "BET $30 (⅓ pot)" or "ALL-IN".
+- **Preflop:** position charts (open, iso-raise over limpers, limp behind, 3-bet for value or as a bluff, set-mine calls, BB defence by equity, 4-bet, fold) and push/fold at 12bb or less.
+- **Postflop:** the EV of every option (fold, check, call, 4 bet sizes, raises, all-in) using ranges and a fold-equity model. Each recommendation is tagged VALUE / PROTECTION / SEMI-BLUFF / BLUFF, and bluffs show the fold % needed vs the fold % expected.
+- **Tests:** 120 pass (engine 51, adapter 45, strategy 24 textbook spots), plus the overlay on every snapshot.
+
+**Next:** play real hands with it, note any bad advice or misreads, then Phase 3, which replaces the default fold rates and ranges with each opponent's real stats.
 
 **Torn table facts (verified from snapshots):**
 - URL `torn.com/page.php?sid=holdem`
@@ -68,6 +75,7 @@
 |---|---|---|---|---|
 | 1 | **Core engine** | Hand evaluator, range parser, Monte Carlo equity, pot odds/EV/MDF/SPR, starter preflop ranges, `advise()` | 1 weekend | ✅ Done |
 | 2 | **Torn overlay** | Tampermonkey script reads the table and shows a draggable panel (action, equity, needed equity, pot odds, call EV, SPR, positions, opponent ranges) | 1 weekend | ✅ Done; ready for live testing |
+| 2.5 | **Decision layer** | Exact action and size. Preflop charts and push/fold. Postflop EV across fold/check/call/bet sizes/raise/all-in with a fold-equity model. VALUE / PROTECTION / SEMI-BLUFF / BLUFF tags. | 1 evening | ✅ Done |
 | 3 | **Opponent tracker + range narrowing** | Per-player action log in IndexedDB. Stats: VPIP (how often they put money in voluntarily), PFR (how often they raise preflop), aggression, fold-to-c-bet. Start everyone at average casual-player stats and shift towards their own numbers as hands accumulate. Narrow ranges street by street. 13×13 range grid in the panel. | 1–2 weekends | ⬜ |
 | 4 | **Solver integration** | Plug in an open-source solver (TexasSolver / postflop-solver; check they're still maintained). Cache common spots. Replace starter preflop ranges with solver charts. | 2–3 weekends | ⬜ |
 | 5 | **Exploit + learning loop** | Node-locking against tracked opponents (tell the solver "this player never bluffs the river" and get the best counter). Log recommendation vs your action vs result. Measure by EV, not raw results. Dashboard. Optional GTO Wizard benchmark. | Ongoing | ⬜ |
@@ -129,3 +137,24 @@ Snapshots contain other players' names. Before committing them, anonymise them t
 
 - Which browser site the friends' tournament will use.
 - Tournament tables: check that the adapter reads them the same way as cash tables (take a snapshot).
+
+## Decision layer reference (strategy.js)
+
+- `decide(ctx)`: uses the preflop logic when there's no board, otherwise the postflop EV logic. It returns `{ action, amount, tag, reason, equity, eqWhenCalled, foldEst, foldNeeded, options[] }`.
+- `describe(d)`: one line for display, e.g. "RAISE to $90" or "BET $30 (⅓ pot)".
+- **How postflop EV works:**
+  - check = equity × realisation × pot
+  - call = equity × realisation × (pot + call) − call
+  - bet/raise = P(all fold) × pot + P(called) × (equity vs their *continuing* range × final pot − amount)
+  - When an opponent continues, they continue with the strongest part of their range.
+- **Tunable `MODEL`:**
+  - Fold rate = 26% + 30% × (bet ÷ pot), capped at 78%. Add 6% on the river and 6% when facing a raise.
+  - Realisation: IP 0.95, OOP 0.85, river 1.0.
+  - If a bet beats check/call by less than 2% of the pot, the coach prefers the simpler line.
+- **Per-opponent hook:** `villain.foldOverride` sets that player's fold rate. Phase 3 feeds real fold-to-bet stats into it.
+- **Known limits:**
+  - It looks one street ahead only: no multi-street plans, implied odds or reverse implied odds.
+  - It doesn't model re-raises after your bet.
+  - Multiway pots are approximated.
+  - Tournaments (ICM) aren't modelled.
+  - The charts are starter approximations.

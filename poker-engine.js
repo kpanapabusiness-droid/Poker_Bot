@@ -224,6 +224,14 @@
     return ra + rb + (suitOf(a) === suitOf(b) ? 's' : 'o');
   }
 
+  // Random source for simulations. Math.random by default; setSeed(n) makes results repeatable (tests).
+  let rand = Math.random;
+  function setSeed(seed) {
+    if (seed == null) { rand = Math.random; return; }
+    let a = seed >>> 0;
+    rand = function () { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  }
+
   // ───────────────────────────── 4. Equity ─────────────────────────────
   /**
    * Monte Carlo equity.
@@ -257,7 +265,7 @@
     const fullBoard = new Array(5), cards7 = new Array(7);
     let eqSum = 0, wins = 0, ties = 0, done = 0, skipped = 0;
 
-    const drawRandom = () => { let c; do { c = (Math.random() * 52) | 0; } while (used[c]); used[c] = 1; return c; };
+    const drawRandom = () => { let c; do { c = (rand() * 52) | 0; } while (used[c]); used[c] = 1; return c; };
 
     for (let it = 0; it < iters; it++) {
       used.set(baseUsed);
@@ -267,7 +275,7 @@
         if (!r) { vHands.push([drawRandom(), drawRandom()]); continue; }
         let tries = 0, h = null;
         while (tries++ < 50) {
-          const cand = r[(Math.random() * r.length) | 0];
+          const cand = r[(rand() * r.length) | 0];
           if (!used[cand[0]] && !used[cand[1]]) { h = cand; break; }
         }
         if (!h) { ok = false; break; }
@@ -467,7 +475,7 @@
     // ranges
     parseRange, rangePercent, inRange, handClass,
     // equity
-    equity,
+    equity, setSeed,
     // odds
     potOdds, callEV, mdf, bluffBreakeven, spr, outsToEquity,
     // preflop

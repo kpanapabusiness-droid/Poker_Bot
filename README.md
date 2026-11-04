@@ -10,7 +10,8 @@ A live poker coaching overlay. It shows the numbers you forget mid-hand: equity,
 |---|---|
 | `poker-engine.js` | Core maths: hand evaluator, range parser, Monte Carlo equity, pot odds / EV / MDF / SPR, starter preflop ranges, `advise()`. No dependencies. Runs in Node and the browser. |
 | `torn-adapter.js` | Reads Torn's poker table: your cards, board, pot, amount to call, seats, dealer, and the action log. Read-only. |
-| `torn-poker-coach.user.js` | Tampermonkey overlay: shows the action, equity, needed equity, pot odds, call EV, SPR, positions and each opponent's estimated range. |
+| `strategy.js` | The decision layer, which tells you exactly what to do and how much. Preflop it uses position charts (open, limp behind, 3-bet for value or as a bluff, call, 4-bet, fold) and switches to push/fold at 12bb or less. Postflop it compares the EV of fold, check, call, bet ⅓ / ½ / ¾ / pot, raise and all-in, using opponent ranges and a fold-equity model. Every recommendation is tagged VALUE, PROTECTION, SEMI-BLUFF or BLUFF. |
+| `torn-poker-coach.user.js` | Tampermonkey overlay showing the exact action and size, why, the tag, fold needed vs expected (for bluffs), every option's EV, equity, SPR, IP/OOP, positions and each opponent's estimated range. |
 | `test-engine.js`, `test/` | Tests. `test/fixtures/` holds real (anonymised) Torn table snapshots. |
 | `docs/poker-coach-plan.md` | Full build plan, decisions, phases and next steps |
 
@@ -36,6 +37,8 @@ E.advise({ equity: 0.41, pot: 150, toCall: 50 });
 3. Go to Torn poker and sit at a table. The panel appears top-right and can be dragged anywhere; it remembers where you put it.
 
 **Updating:** Tampermonkey caches `@require` files. After an update, open the script in the Tampermonkey dashboard → Externals tab and refresh, or bump `@version`.
+
+**How it decides when to bluff:** a bluff works when the opponent folds often enough. A ½-pot bet needs folds 33% of the time to break even. The coach estimates how often a typical casual player folds to each bet size, works out what you win when they fold and your equity when they call, and only recommends a bluff when the maths says it's profitable. All fold rates are starter defaults (`MODEL` in `strategy.js`). Phase 3 replaces them with each opponent's real fold stats.
 
 **How ranges work (for now):** each opponent starts from what they did preflop (opened, 3-bet, called a raise, limped). The range then narrows on every bet, raise or call after the flop. These are starter heuristics; Phase 3 adds per-player stats.
 
