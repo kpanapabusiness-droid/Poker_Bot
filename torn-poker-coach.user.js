@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn Poker Coach
 // @namespace    keanu.poker.coach
-// @version      0.6.1
+// @version      0.6.2
 // @description  Live poker coach for Torn: tells you what to do and how much (value, bluff, semi-bluff), with equity, odds, positions and opponent ranges. Display only — never clicks or acts.
 // @match        https://www.torn.com/page.php?sid=holdem*
 // @require      https://raw.githubusercontent.com/kpanapabusiness-droid/Poker_Bot/main/poker-engine.js
@@ -24,6 +24,8 @@
   'use strict';
   const E = window.PokerEngine, A = window.TornAdapter, S = window.PokerStrategy, T = window.PokerTracker, L = window.PokerLogger;
   if (!E || !A || !S || !T || !L) { console.warn('[PokerCoach] engine/adapter/strategy/tracker/logger not loaded — check the @require lines.'); return; }
+  const VERSION = '0.6.2';
+  console.info(`[PokerCoach] v${VERSION} running — display-only poker assistant: reads this table, makes no requests, never clicks or acts.`);
 
   // ─────────────────────────── Opponent tracker (Phase 3) ───────────────────────────
   // Learns every player from completed hands in the game log. Saved in this browser (localStorage on torn.com).
@@ -175,10 +177,14 @@
   const ACTION_COLORS = { RAISE: '#3b82f6', BET: '#3b82f6', 'ALL-IN': '#a855f7', CALL: '#22c55e', CHECK: '#a3a3a3', FOLD: '#ef4444' };
   const TAG_COLORS = { VALUE: '#22c55e', 'SEMI-BLUFF': '#f59e0b', BLUFF: '#f97316', PROTECTION: '#38bdf8', 'POT CONTROL': '#a3a3a3',
     CALL: '#22c55e', FOLD: '#ef4444', CHECK: '#a3a3a3', CHART: '#94a3b8', 'PUSH/FOLD': '#a855f7' };
-  // The panel lives in a shadow root so Torn's stylesheets can't restyle it (and ours can't leak onto Torn).
-  // This is for CSS isolation only — it hides nothing; the host element is a normal, visible part of the page.
+  // The panel lives in an OPEN shadow root purely so Torn's stylesheets can't restyle it. It hides nothing:
+  // the host is a normal element with an id and data-poker-coach attributes, and host.shadowRoot is readable by the page.
   const host = document.createElement('div');
   host.id = 'poker-coach-host';
+  // Announce ourselves openly: anyone (or any script) inspecting the page can see the coach is running.
+  host.setAttribute('data-poker-coach', VERSION);
+  host.setAttribute('data-poker-coach-mode', 'display-only');
+  document.documentElement.setAttribute('data-poker-coach', VERSION);
   document.body.appendChild(host);
   const shadow = host.attachShadow({ mode: 'open' });
   const panel = document.createElement('div');
@@ -220,7 +226,9 @@
   // ─────────────────────────── Views: Coach | Report ───────────────────────────
   let view = 'coach', scope = 'session';
   const tabBtn = (id, label, active) => `<button data-pc="${id}" style="all:unset;cursor:pointer;font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;${active ? 'background:rgba(255,255,255,.15);color:#fff' : 'color:#9ca3af'}">${label}</button>`;
-  const tabs = () => `<div style="display:flex;gap:4px;margin:-2px 0 8px">${tabBtn('coach', 'Coach', view === 'coach')}${tabBtn('report', 'Report', view === 'report')}</div>`;
+  const titleBar = `<div style="display:flex;justify-content:space-between;align-items:baseline;margin:-2px 0 6px;font-size:11px">
+      <b style="color:#fbbf24">Poker Coach v${VERSION}</b><span style="opacity:.6">display-only assistant</span></div>`;
+  const tabs = () => titleBar + `<div style="display:flex;gap:4px;margin:0 0 8px">${tabBtn('coach', 'Coach', view === 'coach')}${tabBtn('report', 'Report', view === 'report')}</div>`;
 
   // Only rebuild the panel when something it shows has changed. compute() returns the same result
   // object while nothing changes, so its identity (resultId) is a cheap change signal.

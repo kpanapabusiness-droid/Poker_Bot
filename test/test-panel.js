@@ -46,6 +46,20 @@ async function boot({ savedPos, testState, setup } = {}) {
     w.close();
   }
 
+  console.log('Openly identifies itself');
+  {
+    const infos = [];
+    const { w, host, panel } = await boot({ setup: w => { w.console.info = (...a) => infos.push(a.join(' ')); } });
+    const v = (src('torn-poker-coach.user.js').match(/@version\s+(\S+)/) || [])[1];
+    check('Host carries data-poker-coach=<version>', host.getAttribute('data-poker-coach') === v, host.getAttribute('data-poker-coach'));
+    check('Host says display-only', host.getAttribute('data-poker-coach-mode') === 'display-only');
+    check('<html> carries data-poker-coach', w.document.documentElement.getAttribute('data-poker-coach') === v);
+    check('Panel title shows name + version', panel.textContent.includes('Poker Coach v' + v));
+    check('Startup banner logged to console', infos.some(x => x.includes('[PokerCoach] v' + v + ' running')), infos);
+    check('VERSION constant matches @version', src('torn-poker-coach.user.js').includes(`const VERSION = '${v}'`));
+    w.close();
+  }
+
   console.log('Saved position is clamped on-screen');
   {
     const { w, panel } = await boot({ savedPos: { left: '5000px', top: '-300px' } });
