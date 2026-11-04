@@ -46,14 +46,12 @@ E.advise({ equity: 0.41, pot: 150, toCall: 50 });
 
 **The Report tab:** click **Report** at the top of the panel to see how you're doing, for this session or all time. Watch **EV lost** more than the result. The result swings with luck, but EV lost is how much your deviations from the coach cost in the long run, so it measures decision quality. **⬇ CSV** downloads every decision, one row each, for Excel or SQL.
 
-**Your data** (player stats and the hand log) lives in your browser on torn.com. In the console:
-- `PokerCoach.report()` gives the all-time report object, and `PokerCoach.report(false)` this session only.
-- `PokerCoach.downloadCSV()` and `PokerCoach.exportHands()` / `importHands(obj)` / `resetHands()` handle the hand log.
-- `PokerCoach.players()` lists everyone tracked.
-- `PokerCoach.stats('name')` shows one player's details.
-- `PokerCoach.exportStats()` gives you a backup.
-- `PokerCoach.importStats(obj)` restores a backup.
-- `PokerCoach.resetStats()` clears everything.
+**Your data** (player stats and the hand log) lives in your browser on torn.com. Manage it from the Tampermonkey menu (click the Tampermonkey toolbar icon while on Torn → **Torn Poker Coach**):
+- **Download Session CSV**: every logged decision, one row each (the same file as the panel's ⬇ CSV button; it covers all logged hands, not just this session).
+- **Export Hand History** / **Import Hand History…** / **Reset Hand History**: back up, restore or clear the hand log.
+- **Export Player Stats** / **Import Player Stats…** / **Reset Player Stats**: back up, restore or clear the opponent tracker.
+
+Exports save as dated JSON files. Imports and resets ask you to confirm first. Nothing is attached to `window`.
 
 ## Ground rules
 

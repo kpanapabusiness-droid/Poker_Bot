@@ -17,13 +17,14 @@ function check(name, cond, info = '') {
 }
 const wait = ms => new Promise(r => setTimeout(r, ms));
 
-async function boot({ savedPos, testState } = {}) {
+async function boot({ savedPos, testState, setup } = {}) {
   const dom = new JSDOM(`<body>${src('test/fixtures/snap6.html')}</body>`,
     { runScripts: 'outside-only', url: 'https://www.torn.com/page.php?sid=holdem', pretendToBeVisual: true });
   const w = dom.window, errs = [];
   w.console.warn = (...a) => errs.push(a.join(' '));
   if (savedPos) w.localStorage.setItem('pokerCoachPos', JSON.stringify(savedPos));
   if (testState) w.__coachTestState = testState;
+  if (setup) setup(w);
   for (const f of FILES) w.eval(src(f));
   await wait(900);
   const host = w.document.getElementById('poker-coach-host');
@@ -93,6 +94,37 @@ async function boot({ savedPos, testState } = {}) {
     const { w, panel, errs } = await boot({ testState: state });
     const m = panel.textContent.replace(/\s+/g, ' ').match(/SPR\s*([\d.—]+)/);
     check('SPR shows 0.0 when the opponent has nothing behind', m && m[1] === '0.0', m && m[1]);
+    check('No warnings', errs.length === 0, errs);
+    w.close();
+  }
+
+  console.log('Tampermonkey menu commands (no globals)');
+  {
+    const menu = {}, downloads = [];
+    let confirmAnswer = false;
+    const { w, panel, errs } = await boot({ setup: w => {
+      w.GM_registerMenuCommand = (label, fn) => { menu[label] = fn; };
+      w.confirm = () => confirmAnswer; w.alert = () => {};
+      w.URL.createObjectURL = () => 'blob:x'; w.URL.revokeObjectURL = () => {};
+      w.HTMLAnchorElement.prototype.click = function () { downloads.push(this.download); };
+    }});
+    check('window.PokerCoach is gone', w.PokerCoach === undefined);
+    const want = ['Download Session CSV', 'Export Hand History', 'Import Hand History…', 'Reset Hand History',
+      'Export Player Stats', 'Import Player Stats…', 'Reset Player Stats'];
+    check('All menu commands registered', want.every(k => typeof menu[k] === 'function'), Object.keys(menu));
+    menu['Download Session CSV'](); menu['Export Hand History'](); menu['Export Player Stats']();
+    check('CSV download', /^poker-coach-hands-\d{4}-\d\d-\d\d\.csv$/.test(downloads[0]), downloads);
+    check('Hand history JSON download', /^poker-coach-hand-history-.*\.json$/.test(downloads[1]), downloads);
+    check('Player stats JSON download', /^poker-coach-player-stats-.*\.json$/.test(downloads[2]), downloads);
+    // seed something resettable, then check confirm() gates the reset
+    w.localStorage.setItem('pokerCoachPos', '{}');
+    const statsBefore = w.localStorage.getItem('pokerCoachTracker');
+    confirmAnswer = false; menu['Reset Player Stats']();
+    check('Reset cancelled → stats untouched', w.localStorage.getItem('pokerCoachTracker') === statsBefore);
+    confirmAnswer = true; menu['Reset Player Stats'](); menu['Reset Hand History']();
+    const t = JSON.parse(w.localStorage.getItem('pokerCoachTracker') || 'null');
+    check('Reset confirmed → no players tracked', !t || Object.keys(t.players || {}).length === 0, t);
+    check('Panel still rendered after resets', /players tracked/.test(panel.textContent) || /Not in this hand|Reading hand/.test(panel.textContent));
     check('No warnings', errs.length === 0, errs);
     w.close();
   }

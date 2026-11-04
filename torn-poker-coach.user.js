@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn Poker Coach
 // @namespace    keanu.poker.coach
-// @version      0.6.0
+// @version      0.6.1
 // @description  Live poker coach for Torn: tells you what to do and how much (value, bluff, semi-bluff), with equity, odds, positions and opponent ranges. Display only — never clicks or acts.
 // @match        https://www.torn.com/page.php?sid=holdem*
 // @require      https://raw.githubusercontent.com/kpanapabusiness-droid/Poker_Bot/main/poker-engine.js
@@ -9,14 +9,16 @@
 // @require      https://raw.githubusercontent.com/kpanapabusiness-droid/Poker_Bot/main/strategy.js
 // @require      https://raw.githubusercontent.com/kpanapabusiness-droid/Poker_Bot/main/tracker.js
 // @require      https://raw.githubusercontent.com/kpanapabusiness-droid/Poker_Bot/main/logger.js
-// @grant        none
+// @grant        GM_registerMenuCommand
 // @run-at       document-idle
 // ==/UserScript==
 //
 // RULES WE STICK TO (Torn scripting compliance — re-check the official rules before using):
 //   • Reads only the page you're viewing.  • Makes zero requests to Torn.  • Never clicks or acts.
 //
-// DEV MODE: set window.__coachTestState to a TableState object in the console to drive the panel by hand.
+// TEST HOOK: the jsdom tests set window.__coachTestState to a TableState to drive the panel. (With @grant set,
+// Tampermonkey runs the script in its own sandbox, so this isn't reachable from the page console.)
+// MANAGEMENT: export / import / reset / CSV are in the Tampermonkey menu — nothing is attached to window.
 //
 (function () {
   'use strict';
@@ -35,32 +37,55 @@
   const HANDS_KEY = 'pokerCoachHands';
   const logger = L.create({
     load: () => { try { return JSON.parse(localStorage.getItem(HANDS_KEY) || 'null'); } catch (e) { return null; } },
-    save: d => { try { localStorage.setItem(HANDS_KEY, JSON.stringify(d)); } catch (e) { console.warn('[PokerCoach] hand log storage full — export and reset it', e); } },
+    save: d => { try { localStorage.setItem(HANDS_KEY, JSON.stringify(d)); } catch (e) { console.warn('[PokerCoach] hand log storage full — use Tampermonkey menu → Export Hand History, then Reset Hand History', e); } },
   });
-  function downloadCSV() {
-    const blob = new Blob([logger.toCSV()], { type: 'text/csv' });
+  const today = () => new Date().toISOString().slice(0, 10);
+  function downloadFile(text, type, name) {
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'poker-coach-hands-' + new Date().toISOString().slice(0, 10) + '.csv';
+    a.href = URL.createObjectURL(new Blob([text], { type }));
+    a.download = name;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   }
+  const downloadCSV = () => downloadFile(logger.toCSV(), 'text/csv', `poker-coach-hands-${today()}.csv`);
+  const downloadJSON = (data, prefix) => downloadFile(JSON.stringify(data), 'application/json', `${prefix}-${today()}.json`);
 
-  // Console helpers
-  window.PokerCoach = {
-    stats: name => tracker.estimate(name),
-    players: () => tracker.players().map(n => ({ name: n, ...summary(tracker.estimate(n)) })),
-    exportStats: () => tracker.exportData(),
-    importStats: d => tracker.importData(d),
-    resetStats: () => tracker.reset(),
-    report: (allTime = true) => logger.report({ since: allTime ? 0 : logger.sessionSince() }),
-    hands: () => logger.hands(),
-    exportHands: () => logger.exportData(),
-    importHands: d => logger.importData(d),
-    downloadCSV,
-    resetHands: () => logger.reset(),
-  };
-  const summary = e => ({ type: e.type.label, hands: e.hands, vpip: Math.round(e.vpip * 100), pfr: Math.round(e.pfr * 100), af: +e.af.toFixed(1), f2b: Math.round(e.f2b * 100) });
+  // Pick a JSON backup file and hand the parsed object to `apply`. Nothing is overwritten unless you confirm.
+  function importJSON(what, valid, apply) {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json,application/json';
+    input.onchange = () => {
+      const f = input.files && input.files[0];
+      if (!f) return;
+      f.text().then(t => {
+        const d = JSON.parse(t);
+        if (!valid(d)) throw new Error(`it doesn't look like a ${what} export`);
+        if (!confirm(`Replace your current ${what} with "${f.name}"? Export first if you want to keep the current data.`)) return;
+        apply(d);
+        refresh();
+        alert(`${what[0].toUpperCase() + what.slice(1)} imported.`);
+      }).catch(e => alert(`Couldn't read that file as a Poker Coach backup: ${e.message}`));
+    };
+    input.click();
+  }
+  function confirmReset(what, reset) {
+    if (!confirm(`Permanently delete all ${what}? This can't be undone. Export first if you want a backup.`)) return;
+    reset();
+    refresh();
+  }
+
+  // Management commands live in the Tampermonkey menu (toolbar icon → Torn Poker Coach), not on window.
+  // Guarded so the script still runs where GM_registerMenuCommand doesn't exist (e.g. the jsdom tests).
+  if (typeof GM_registerMenuCommand === 'function') {
+    GM_registerMenuCommand('Download Session CSV', downloadCSV);
+    GM_registerMenuCommand('Export Hand History', () => downloadJSON(logger.exportData(), 'poker-coach-hand-history'));
+    GM_registerMenuCommand('Import Hand History…', () => importJSON('hand history', d => d && Array.isArray(d.hands), d => logger.importData(d)));
+    GM_registerMenuCommand('Reset Hand History', () => confirmReset('logged hands', () => logger.reset()));
+    GM_registerMenuCommand('Export Player Stats', () => downloadJSON(tracker.exportData(), 'poker-coach-player-stats'));
+    GM_registerMenuCommand('Import Player Stats…', () => importJSON('player stats', d => d && typeof d.players === 'object', d => tracker.importData(d)));
+    GM_registerMenuCommand('Reset Player Stats', () => confirmReset('tracked player stats', () => tracker.reset()));
+  }
 
   // ─────────────────────────── Opponent ranges ───────────────────────────
   // Sized from each player's OWN stats (shrunk towards average for strangers), then narrowed
@@ -310,9 +335,10 @@
     else if (id === 'scope-session') scope = 'session';
     else if (id === 'scope-all') scope = 'all';
     else if (id === 'csv') downloadCSV();
-    render(lastState, lastRender, true);
+    refresh();
   });
   let lastState = null, lastRender = null;
+  function refresh() { render(lastState, lastRender, true); }
 
   const TYPE_COLORS = { STATION: '#22c55e', FISH: '#22c55e', MANIAC: '#ef4444', NIT: '#38bdf8', ROCK: '#38bdf8', TAG: '#f59e0b', LAG: '#f97316', AVG: '#94a3b8', '?': '#6b7280' };
   function headsUpNote(r) {
