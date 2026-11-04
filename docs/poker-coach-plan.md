@@ -23,10 +23,17 @@
 - **Stats storage:** saved in localStorage, with console helpers for export, import and reset.
 - **Tests:** 138 pass (engine 51, adapter 45, strategy 24, tracker 18). The same river spot with nothing → check vs a calling station, bluff vs a nit.
 
-**Next:** play sessions so the tracker builds up data, report any bad advice, then pick from:
+**Update (5 Nov) — hand logger (overlay v0.5):** `logger.js` records every hand you're dealt into.
+- **What it records:** each decision point (coach's action, size, tag and EV vs your actual action), followed yes/no, size OK, EV lost, and the result.
+- **How the result is worked out:** from the game log, cross-checked against your stack at the next hand (the stack wins when you went all-in).
+- **The panel** now has **Coach | Report** tabs. The Report shows session or all-time hands, result, bb/100, follow rate, EV lost (total and per 100 hands), hands where you followed vs deviated, your habit patterns ("Coach FOLD → you CALL ×N · −$X EV"), your costliest decisions, and bb/100 by position.
+- **CSV export:** one row per decision, for SQL/Excel analysis.
+- **Storage:** localStorage, up to 2,500 hands.
+- **Tests:** 163 pass (engine 51, adapter 45, strategy 24, tracker 18, logger 25), plus the overlay on every snapshot and a Report-tab UI test.
+
+**Next:** play sessions, check the Report, tell Claude about any spots where the advice felt wrong. Options after that:
 - a 13×13 range grid in the panel
-- a session log and EV dashboard (Phase 5's learning loop)
-- the Claude review connector
+- the Claude review connector (MCP over the CSV/hand log)
 - the PokerNow adapter for the friends' game
 
 **Torn table facts (verified from snapshots):**
@@ -94,7 +101,7 @@
 | 2.5 | **Decision layer** | Exact action and size. Preflop charts and push/fold. Postflop EV across fold/check/call/bet sizes/raise/all-in with a fold-equity model. VALUE / PROTECTION / SEMI-BLUFF / BLUFF tags. | 1 evening | ✅ Done |
 | 3 | **Opponent tracker + range narrowing** | Per-player action log in IndexedDB. Stats: VPIP (how often they put money in voluntarily), PFR (how often they raise preflop), aggression, fold-to-c-bet. Start everyone at average casual-player stats and shift towards their own numbers as hands accumulate. Narrow ranges street by street. 13×13 range grid in the panel. | 1–2 weekends | ✅ Done (except the range grid) |
 | 4 | **Solver integration** | Plug in an open-source solver (TexasSolver / postflop-solver; check they're still maintained). Cache common spots. Replace starter preflop ranges with solver charts. | 2–3 weekends | ⬜ |
-| 5 | **Exploit + learning loop** | Node-locking against tracked opponents (tell the solver "this player never bluffs the river" and get the best counter). Log recommendation vs your action vs result. Measure by EV, not raw results. Dashboard. Optional GTO Wizard benchmark. | Ongoing | ⬜ |
+| 5 | **Exploit + learning loop** | Node-locking against tracked opponents (tell the solver "this player never bluffs the river" and get the best counter). Log recommendation vs your action vs result. Measure by EV, not raw results. Dashboard. Optional GTO Wizard benchmark. | Ongoing | 🟡 Logging, EV-lost measurement and the Report dashboard are done; node-locking is still to do |
 | + | **Claude layer** | MCP server over the hand DB: `session_summary`, `find_leaks`, `biggest_losing_hands`, `review_hand(id)`. Plus an "explain this spot" button. | 1 weekend (alongside 3+) | ⬜ |
 | + | **PokerNow adapter** | Second adapter for the friends' tournament | ~1 day once the engine is stable | ⬜ |
 

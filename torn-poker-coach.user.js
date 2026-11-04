@@ -1,13 +1,14 @@
 // ==UserScript==
 // @name         Torn Poker Coach
 // @namespace    keanu.poker.coach
-// @version      0.4.0
+// @version      0.5.0
 // @description  Live poker coach for Torn: tells you what to do and how much (value, bluff, semi-bluff), with equity, odds, positions and opponent ranges. Display only — never clicks or acts.
 // @match        https://www.torn.com/page.php?sid=holdem*
 // @require      https://raw.githubusercontent.com/kpanapabusiness-droid/Poker_Bot/main/poker-engine.js
 // @require      https://raw.githubusercontent.com/kpanapabusiness-droid/Poker_Bot/main/torn-adapter.js
 // @require      https://raw.githubusercontent.com/kpanapabusiness-droid/Poker_Bot/main/strategy.js
 // @require      https://raw.githubusercontent.com/kpanapabusiness-droid/Poker_Bot/main/tracker.js
+// @require      https://raw.githubusercontent.com/kpanapabusiness-droid/Poker_Bot/main/logger.js
 // @grant        none
 // @run-at       document-idle
 // ==/UserScript==
@@ -19,8 +20,8 @@
 //
 (function () {
   'use strict';
-  const E = window.PokerEngine, A = window.TornAdapter, S = window.PokerStrategy, T = window.PokerTracker;
-  if (!E || !A || !S || !T) { console.warn('[PokerCoach] engine/adapter/strategy/tracker not loaded — check the @require lines.'); return; }
+  const E = window.PokerEngine, A = window.TornAdapter, S = window.PokerStrategy, T = window.PokerTracker, L = window.PokerLogger;
+  if (!E || !A || !S || !T || !L) { console.warn('[PokerCoach] engine/adapter/strategy/tracker/logger not loaded — check the @require lines.'); return; }
 
   // ─────────────────────────── Opponent tracker (Phase 3) ───────────────────────────
   // Learns every player from completed hands in the game log. Saved in this browser (localStorage on torn.com).
@@ -29,13 +30,35 @@
     load: () => { try { return JSON.parse(localStorage.getItem(STORE_KEY) || 'null'); } catch (e) { return null; } },
     save: d => { try { localStorage.setItem(STORE_KEY, JSON.stringify(d)); } catch (e) {} },
   });
-  // Console helpers: PokerCoach.stats('name'), PokerCoach.exportStats(), PokerCoach.importStats(obj), PokerCoach.resetStats()
+  // ─────────────────────────── Hand logger ───────────────────────────
+  // Records every hand + decision (coach's advice vs what you did, EV lost) for the Report view.
+  const HANDS_KEY = 'pokerCoachHands';
+  const logger = L.create({
+    load: () => { try { return JSON.parse(localStorage.getItem(HANDS_KEY) || 'null'); } catch (e) { return null; } },
+    save: d => { try { localStorage.setItem(HANDS_KEY, JSON.stringify(d)); } catch (e) { console.warn('[PokerCoach] hand log storage full — export and reset it', e); } },
+  });
+  function downloadCSV() {
+    const blob = new Blob([logger.toCSV()], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'poker-coach-hands-' + new Date().toISOString().slice(0, 10) + '.csv';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  }
+
+  // Console helpers
   window.PokerCoach = {
     stats: name => tracker.estimate(name),
     players: () => tracker.players().map(n => ({ name: n, ...summary(tracker.estimate(n)) })),
     exportStats: () => tracker.exportData(),
     importStats: d => tracker.importData(d),
     resetStats: () => tracker.reset(),
+    report: (allTime = true) => logger.report({ since: allTime ? 0 : logger.sessionSince() }),
+    hands: () => logger.hands(),
+    exportHands: () => logger.exportData(),
+    importHands: d => logger.importData(d),
+    downloadCSV,
+    resetHands: () => logger.reset(),
   };
   const summary = e => ({ type: e.type.label, hands: e.hands, vpip: Math.round(e.vpip * 100), pfr: Math.round(e.pfr * 100), af: +e.af.toFixed(1), f2b: Math.round(e.f2b * 100) });
 
@@ -141,9 +164,26 @@
     o.action === 'RAISE' ? `Raise to ${usd(o.amount)}` : o.action === 'CALL' ? `Call ${usd(o.amount)}` :
     o.action === 'ALL-IN' ? `All-in ${usd(o.amount)}` : o.action[0] + o.action.slice(1).toLowerCase();
 
+  // ─────────────────────────── Views: Coach | Report ───────────────────────────
+  let view = 'coach', scope = 'session';
+  const tabBtn = (id, label, active) => `<button data-pc="${id}" style="all:unset;cursor:pointer;font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;${active ? 'background:rgba(255,255,255,.15);color:#fff' : 'color:#9ca3af'}">${label}</button>`;
+  const tabs = () => `<div style="display:flex;gap:4px;margin:-2px 0 8px">${tabBtn('coach', 'Coach', view === 'coach')}${tabBtn('report', 'Report', view === 'report')}</div>`;
+
   function render(state, r) {
-    if (!state) { panel.innerHTML = '<b>Poker Coach</b><div style="opacity:.6;margin-top:6px">No table found</div>'; return; }
-    if (!r) { panel.innerHTML = `<b>Poker Coach</b><div style="opacity:.6;margin-top:6px">${state.heroInHand ? 'Reading hand…' : 'Not in this hand — waiting'}</div>`; return; }
+    const body = view === 'report' ? reportView() : coachView(state, r);
+    panel.innerHTML = tabs() + body;
+  }
+
+  function sessionLine() {
+    const s = logger.report({ since: logger.sessionSince() });
+    if (!s.hands) return 'Session: no hands logged yet';
+    return `Session: ${s.hands} hand${s.hands === 1 ? '' : 's'} · ${s.net >= 0 ? '+' : '−'}${usd(Math.abs(s.net))} · followed ${s.followRate == null ? '—' : pct(s.followRate)}`;
+  }
+
+  function coachView(state, r) {
+    if (!state) return '<div style="opacity:.6">No table found</div>';
+    if (!r) return `<div style="opacity:.6">${state.heroInHand ? 'Reading hand…' : 'Not in this hand — waiting'}</div>
+      <div style="font-size:10px;opacity:.45;margin-top:8px">${esc(sessionLine())}</div>`;
     const { d } = r;
     const yourTurn = state.isHeroTurn;
     const color = yourTurn ? (ACTION_COLORS[d.action] || '#e5e7eb') : '#9ca3af';
@@ -156,7 +196,7 @@
         <span>${best ? '▶ ' : ''}${esc(optLabel(o))}</span><span>${o.ev >= 0 ? '+' : ''}${usd(o.ev)}</span></div>`;
     }).join('');
 
-    panel.innerHTML = `
+    return `
       <div style="display:flex;justify-content:space-between;opacity:.75;font-size:11px">
         <span>${esc(r.handClass)} · ${esc(r.heroPos)}${state.street !== 'preflop' ? (r.inPosition ? ' · IP' : ' · OOP') : ''} · ${esc(state.street)}</span>
         <span>${d.handName ? esc(d.handName) : ''}</span></div>
@@ -187,8 +227,54 @@
         }).join('') || '<span style="opacity:.6">No opponents</span>'}
       </div>
       ${headsUpNote(r)}
-      <div style="font-size:10px;opacity:.4;margin-top:6px">${tracker.players().length} players tracked · strangers start as average casual players</div>`;
+      <div style="font-size:10px;opacity:.45;margin-top:6px">${esc(sessionLine())}</div>
+      <div style="font-size:10px;opacity:.35;margin-top:2px">${tracker.players().length} players tracked · strangers start as average casual players</div>`;
   }
+
+  function reportView() {
+    const rp = logger.report({ since: scope === 'session' ? logger.sessionSince() : 0 });
+    const sign = x => (x >= 0 ? '+' : '−') + usd(Math.abs(x));
+    const scopeBtns = `<div style="display:flex;gap:4px;margin-bottom:6px">${tabBtn('scope-session', 'Session', scope === 'session')}${tabBtn('scope-all', 'All time', scope === 'all')}
+      <span style="flex:1"></span>${tabBtn('csv', '⬇ CSV', false)}</div>`;
+    if (!rp.hands) return scopeBtns + '<div style="opacity:.6;font-size:12px">No hands logged yet. Play a few and they\'ll show up here.</div>';
+    const cardStr = c => (c || []).join(' ');
+    const actStr = a => a.action ? `${a.action}${a.amount ? ' ' + usd(a.amount) : ''}` : `${(a.type || '').toUpperCase()}${a.amount ? ' ' + usd(a.amount) : ''}`;
+    const pos = Object.entries(rp.byPosition).sort((a, b) => b[1].hands - a[1].hands)
+      .map(([p, x]) => `<span style="opacity:.6">${esc(p)}</span><span>${x.hands}h</span><b style="color:${x.bb100 >= 0 ? '#22c55e' : '#ef4444'}">${x.bb100 >= 0 ? '+' : ''}${x.bb100.toFixed(0)} bb/100</b>`).join('');
+    return scopeBtns + `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:3px 10px;font-size:12px">
+        ${row('Hands', rp.hands)}
+        ${row('Result', `<span style="color:${rp.net >= 0 ? '#22c55e' : '#ef4444'}">${sign(rp.net)}</span>`)}
+        ${row('bb/100', rp.bb100.toFixed(1))}
+        ${row('Followed', rp.followRate == null ? '—' : pct(rp.followRate))}
+        ${row('EV lost', usd(rp.evLost))}
+        ${row('EV lost/100', rp.evLostPer100.toFixed(1) + ' bb')}
+      </div>
+      <div style="font-size:11px;margin-top:6px;opacity:.85">Followed every time: ${rp.followedHands} hands, ${sign(rp.followedNet)} · Went your own way: ${rp.deviatedHands} hands, ${sign(rp.deviatedNet)}</div>
+      ${rp.patterns.length ? `<div style="margin-top:8px;border-top:1px solid rgba(255,255,255,.1);padding-top:6px;font-size:11px">
+        <div style="opacity:.5;margin-bottom:2px">Your habits vs the coach</div>
+        ${rp.patterns.slice(0, 4).map(x => `<div style="display:flex;justify-content:space-between"><span>Coach ${esc(x.pattern)}</span><span style="opacity:.75">×${x.count}${x.evLost ? ' · −' + usd(x.evLost) + ' EV' : ''}</span></div>`).join('')}</div>` : ''}
+      ${rp.costliest.length ? `<div style="margin-top:8px;border-top:1px solid rgba(255,255,255,.1);padding-top:6px;font-size:11px">
+        <div style="opacity:.5;margin-bottom:2px">Costliest decisions</div>
+        ${rp.costliest.slice(0, 3).map(x => `<div style="margin-bottom:3px"><b>${esc(cardStr(x.cards))}</b> <span style="opacity:.6">${esc(x.street)} · ${esc(cardStr(x.board))}</span><br>
+          <span style="opacity:.8">Coach: ${esc(actStr(x.rec))} · You: ${esc(actStr(x.actual))}</span> <span style="color:#ef4444">−${usd(x.evLost)} EV</span></div>`).join('')}</div>` : ''}
+      <div style="margin-top:8px;border-top:1px solid rgba(255,255,255,.1);padding-top:6px;font-size:11px">
+        <div style="opacity:.5;margin-bottom:2px">By position</div>
+        <div style="display:grid;grid-template-columns:auto auto 1fr;gap:2px 10px">${pos}</div></div>
+      <div style="font-size:10px;opacity:.4;margin-top:6px">Results swing with luck — EV lost is the number to shrink</div>`;
+  }
+
+  panel.addEventListener('click', e => {
+    const b = e.target.closest('[data-pc]');
+    if (!b) return;
+    const id = b.getAttribute('data-pc');
+    if (id === 'coach' || id === 'report') view = id;
+    else if (id === 'scope-session') scope = 'session';
+    else if (id === 'scope-all') scope = 'all';
+    else if (id === 'csv') downloadCSV();
+    render(lastState, lastRender);
+  });
+  let lastState = null, lastRender = null;
 
   const TYPE_COLORS = { STATION: '#22c55e', FISH: '#22c55e', MANIAC: '#ef4444', NIT: '#38bdf8', ROCK: '#38bdf8', TAG: '#f59e0b', LAG: '#f97316', AVG: '#94a3b8', '?': '#6b7280' };
   function headsUpNote(r) {
@@ -202,6 +288,7 @@
   function makeDraggable(el) {
     let sx, sy, ox, oy;
     el.addEventListener('mousedown', e => {
+      if (e.target.closest('button')) return; // let tab/CSV buttons click
       sx = e.clientX; sy = e.clientY; const b = el.getBoundingClientRect(); ox = b.left; oy = b.top;
       const move = ev => { el.style.left = ox + ev.clientX - sx + 'px'; el.style.top = oy + ev.clientY - sy + 'px'; el.style.right = 'auto'; };
       const up = () => {
@@ -217,7 +304,10 @@
     try {
       const state = window.__coachTestState || A.readState(document);
       if (!window.__coachTestState) tracker.ingest(A.readLog(document)); // learn from any newly finished hands
-      render(state, compute(state));
+      const r = compute(state);
+      if (!window.__coachTestState && state) logger.observe(state, r && r.d, { position: r ? r.heroPos : null, bb: r ? r.bb : 0 });
+      lastState = state; lastRender = r;
+      render(state, r);
     } catch (e) { console.warn('[PokerCoach]', e); }
   }, 400);
 })();
