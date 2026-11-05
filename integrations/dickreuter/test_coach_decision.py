@@ -10,6 +10,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 LOGS = tempfile.mkdtemp()
 os.environ['POKER_COACH_LOG_DIR'] = LOGS
+os.environ['POKER_COACH_TRACKER'] = os.path.join(LOGS, 'players.json')
 import coach_decision as C  # noqa: E402
 
 passed = failed = 0
@@ -55,7 +56,7 @@ check('BB with trash in a limped pot checks, never folds', d.decision == 'Check'
 
 print('\nPostflop, with history carried across streets')
 pre = table(['AH', 'KH'], dealer=0, call=4.0, pot=9, bets={1: 1.0, 2: 6.0}, live=[2])
-C.table_to_state(pre, NS(GameID=7))
+decide(pre, game=7)
 flop = table(['AH', 'KH'], board=['QH', '7H', '2H'], dealer=0, call=0.0, check_btn=True, pot=24, live=[2])
 d = decide(flop, game=7)
 check('nut flush checked to on the button bets', d.decision.startswith('Bet'), d.decision)
@@ -82,6 +83,16 @@ d = CD()
 d.make_decision(table([], dealer=0), NS(GameID=3), None, None)
 check("unreadable cards → dickreuter's own decision", d.decision == 'Fold' and d.coach is None)
 
+print('\nNames and stacks')
+tn = table(['AS', 'KD'])
+tn.coach_player_names = {1: 'Ann', 2: 'Bob', 3: 'Cy', 4: 'Di', 5: 'Ed'}
+tn.player_funds = [200.0, 150.0, 90.5, '', 300.0, 12.0]
+st = C.table_to_state(tn, NS(GameID=55))
+check('names reach the brain', [pl['name'] for pl in st['players']] == ['Ann', 'Bob', 'Cy', 'Di', 'Ed'], st['players'])
+check('stacks read for every seat; unreadable ones fall back', [pl['stack'] for pl in st['players']] == [150.0, 90.5, 200.0, 300.0, 12.0], st['players'])
+st2 = C.table_to_state(table(['AS', 'KD'], dealer=4), NS(GameID=56, round_number=0))
+check('our big blind counted as our chips before we act', st2['heroBet'] == 2.0, st2['heroBet'])
+
 print('\nBlinds from the strategy')
 st = C.table_to_state(table(['AS', 'KD']), None, NS(selected_strategy={'bigBlind': 50}))
 check("big blind comes from dickreuter's strategy", st['bb'] == 50)
@@ -107,7 +118,7 @@ dr = os.environ.get('DICKREUTER_DIR', os.path.join(HERE, '..', '..', '..', 'dick
 if os.path.exists(os.path.join(dr, 'poker', 'main.py')):
     tmp = tempfile.mkdtemp()
     try:
-        for rel in ('poker/main.py', 'poker/tools/strategy_handler.py', 'poker/decisionmaker/decisionmaker.py', 'poker/config.ini'):
+        for rel in ('poker/main.py', 'poker/tools/strategy_handler.py', 'poker/decisionmaker/decisionmaker.py', 'poker/decisionmaker/curvefitting.py', 'poker/config.ini'):
             os.makedirs(os.path.dirname(os.path.join(tmp, rel)), exist_ok=True)
             shutil.copy(os.path.join(dr, rel), os.path.join(tmp, rel))
         for _ in range(2):  # twice: must be idempotent
@@ -116,6 +127,9 @@ if os.path.exists(os.path.join(dr, 'poker', 'main.py')):
         sh = open(os.path.join(tmp, 'poker', 'tools', 'strategy_handler.py')).read()
         check('installer runs twice cleanly', r.returncode == 0, r.stderr)
         check('main.py uses CoachDecision once', main.count('d = CoachDecision(') == 1)
+        cf = open(os.path.join(tmp, 'poker', 'decisionmaker', 'curvefitting.py')).read()
+        check('lmfit crash fixed', 'poker-coach: lmfit 1.3 fix' in cf)
+        check('fast fold off and screenshot server off', "poker-coach: fast fold off" in main and 'poker-coach: screenshot web server' in main and 't2.start()' not in main)
         check('collusion forced off', "['collusion'] = 0" in sh and "['collusion'] = 1" not in sh)
         cfg = open(os.path.join(tmp, 'poker', 'config.ini')).read() if os.path.exists(os.path.join(tmp, 'poker', 'config.ini')) else 'db = http://127.0.0.1:7778/'
         check('config.ini points at the local database', 'db = http://127.0.0.1:7778/' in cfg and 'dickreuter.com' not in cfg)

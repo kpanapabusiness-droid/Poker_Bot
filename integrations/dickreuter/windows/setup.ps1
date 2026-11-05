@@ -73,6 +73,10 @@ $env:DICKREUTER_DIR = Join-Path $Base 'dickreuter-poker'
 if ($LASTEXITCODE -ne 0) { $problems += 'bridge tests failed' }
 & $Py poker_bot\integrations\dickreuter\test_local_server.py
 if ($LASTEXITCODE -ne 0) { $problems += 'local database tests failed' }
+node poker_bot\integrations\dickreuter\test_brain.js
+if ($LASTEXITCODE -ne 0) { $problems += 'opponent-learning tests failed' }
+node poker_bot\test\test-solver.js
+if ($LASTEXITCODE -ne 0) { $problems += 'solver tests failed' }
 & $Py -c "import sys; sys.path.insert(0, r'$Base\dickreuter-poker'); import poker.decisionmaker.coach_decision as c; print('coach_decision imports inside dickreuter:', c.Decision.__name__)"
 if ($LASTEXITCODE -ne 0) { $problems += "dickreuter's code doesn't import (a requirement is missing)" }
 

@@ -49,8 +49,10 @@ class Brain:
     _instance = None
     _lock = threading.Lock()
 
-    def __init__(self, script=None, node=None):
+    def __init__(self, script=None, node=None, tracker_file=None, solver=True):
         here = os.path.dirname(os.path.abspath(__file__))
+        self.tracker_file = tracker_file
+        self.solver = solver
         self.script = script or os.environ.get('POKER_COACH_BRAIN') or _find_brain(here)
         self.node = node or os.environ.get('POKER_COACH_NODE') or shutil.which('node') or 'node'
         self.proc = None
@@ -65,14 +67,20 @@ class Brain:
     def _start(self):
         if self.proc and self.proc.poll() is None:
             return
-        self.proc = subprocess.Popen([self.node, self.script, '--serve'], stdin=subprocess.PIPE,
+        tracker = self.tracker_file if self.tracker_file is not None else (
+            os.environ.get('POKER_COACH_TRACKER') or os.path.join(os.path.expanduser('~'), 'poker', 'local-db', 'players.json'))
+        args = [self.node, self.script, '--serve'] + (['--tracker', tracker] if tracker else []) + ([] if self.solver else ['--no-solver'])
+        self.proc = subprocess.Popen(args, stdin=subprocess.PIPE,
                                      stdout=subprocess.PIPE, text=True, bufsize=1)
         atexit.register(self.close)
 
     def ask(self, table):
+        return self.request(table)['decision']
+
+    def request(self, msg):
         with self._lock:
             self._start()
-            self.proc.stdin.write(json.dumps(table) + '\n')
+            self.proc.stdin.write(json.dumps(msg) + '\n')
             self.proc.stdin.flush()
             line = self.proc.stdout.readline()
         if not line:
@@ -80,7 +88,7 @@ class Brain:
         reply = json.loads(line)
         if not reply.get('ok'):
             raise RuntimeError(reply.get('error'))
-        return reply['decision']
+        return reply
 
     def close(self):
         if self.proc and self.proc.poll() is None:
@@ -95,7 +103,7 @@ def _find_brain(start):
     return os.path.join(start, 'brain.js')
 
 
-# What we saw on earlier streets of the current hand: {game_id: {street: {seat: bet}}}
+# Snapshots of the current hand, one per decision: {game_id: [snapshot, ...]}
 _hand_memory = {}
 
 
@@ -109,41 +117,132 @@ def _big_blind(t, p):
     return _num(getattr(t, 'bigBlind', 0)) or 1.0
 
 
+# ── Reading the other seats (names, stacks) ──
+# dickreuter only reads your own stack during play, and its name reading is switched off. We read
+# both ourselves from the areas you marked in the table setup ("player_name_area",
+# "player_funds_area"). Names are read once per seat per hand; stacks every decision.
+_name_cache = {}  # (game_id, seat) -> name
+_tess = None
+
+
+def _ocr_text(img):
+    """Name OCR: tesseract with no character whitelist (dickreuter's own reader only allows digits)."""
+    global _tess
+    try:
+        from tesserocr import PyTessBaseAPI, PSM, OEM
+        from poker.tools.screen_operations import tesserpath, prepareImage
+    except Exception:
+        return ''
+    if _tess is None:
+        _tess = PyTessBaseAPI(path=tesserpath, psm=PSM.SINGLE_LINE, oem=OEM.LSTM_ONLY)
+    best = ''
+    for img2 in (prepareImage(img, binarize=True), prepareImage(img, binarize=True, threshold=125), prepareImage(img, binarize=False)):
+        _tess.SetImage(img2)
+        txt = ''.join(ch for ch in _tess.GetUTF8Text().strip() if ch.isalnum() or ch in '_.-')
+        if len(txt) > len(best):
+            best = txt
+    return best
+
+
+def read_seats(t, game_id, n):
+    """Returns ({seat: name}, {seat: stack}) for seats 1..n-1, from whatever this table can give."""
+    names, stacks = {}, {}
+    td = getattr(t, 'table_dict', None) or {}
+    override_names = getattr(t, 'coach_player_names', None)  # the simulator (and tests) set these directly
+    funds = getattr(t, 'player_funds', None)
+    for seat in range(1, n):
+        if override_names is not None:
+            names[seat] = override_names.get(seat, '')
+        elif isinstance(td.get('player_name_area'), dict) and str(seat) in td['player_name_area']:
+            key = (game_id, seat)
+            if key not in _name_cache:
+                try:
+                    a = td['player_name_area'][str(seat)]
+                    _name_cache[key] = _ocr_text(t.screenshot.crop((a['x1'], a['y1'], a['x2'], a['y2'])))
+                except Exception as e:
+                    log.debug("name OCR failed for seat %s: %s", seat, e)
+                    _name_cache[key] = ''
+            names[seat] = _name_cache[key]
+        stack = None
+        if isinstance(funds, (list, tuple)) and len(funds) > seat and funds[seat] not in ('', None):
+            stack = _num(funds[seat], None)
+        elif isinstance(td.get('player_funds_area'), dict) and str(seat) in td['player_funds_area'] and hasattr(t, 'screenshot'):
+            try:
+                from poker.tools.screen_operations import ocr
+                stack = _num(ocr(t.screenshot, 'player_funds_area', td, str(seat), fast=True), None)
+            except Exception as e:
+                log.debug("stack OCR failed for seat %s: %s", seat, e)
+        if stack is not None and stack >= 0:
+            stacks[seat] = stack
+    if len(_name_cache) > 200:
+        for k in list(_name_cache)[:-60]:
+            _name_cache.pop(k, None)
+    return names, stacks
+
+
+def _hero_bet(t, h, p, n, dealer, street, bb):
+    """Our chips in front of us this street. dickreuter only reads them after our first action."""
+    if h is not None and getattr(h, 'round_number', 0) == 0:
+        if street != 'preflop':
+            return 0.0
+        k = (0 - dealer) % n
+        if n == 2:
+            return bb / 2 if k == 0 else bb
+        return bb / 2 if k == 1 else bb if k == 2 else 0.0
+    v = getattr(t, 'bot_pot', None)
+    if v is None and hasattr(t, 'get_bot_pot') and p is not None:
+        try:
+            t.get_bot_pot(p)
+            v = getattr(t, 'bot_pot', 0)
+        except Exception:
+            v = 0
+    return _num(v)
+
+
 def table_to_state(t, h=None, p=None):
     """dickreuter TableScreenBased (+ History, strategy) → the JSON brain.js expects."""
     board = [str(c) for c in (getattr(t, 'cardsOnTable', None) or [])]
     street = STREETS.get(len(board), 'river')
     n = int(_num(getattr(t, 'total_players', 6), 6)) or 6
     bb = _big_blind(t, p)
-    hero_bet = _num(getattr(t, 'bot_pot', 0))
+    dealer = int(_num(getattr(t, 'dealer_position', 0), 0)) % n
+    game = getattr(h, 'GameID', None) if h is not None else None
+    hero_bet = _hero_bet(t, h, p, n, dealer, street, bb)
+    names, stacks = read_seats(t, game, n)
 
     players = []
     for op in getattr(t, 'other_players', []) or []:
         seat = int(op.get('abs_position', 0)) + 1
-        players.append({'seat': seat, 'stack': _num(op.get('funds')), 'bet': _num(op.get('pot')),
-                        'inHand': bool(op.get('status') == 1 or op.get('status') is True)})
+        players.append({'seat': seat, 'name': names.get(seat, ''), 'stack': stacks.get(seat, _num(op.get('funds'))),
+                        'bet': _num(op.get('pot')), 'inHand': bool(op.get('status') == 1 or op.get('status') is True)})
 
-    to_call = 0.0 if getattr(t, 'checkButton', False) else _num(getattr(t, 'minCall', getattr(t, 'currentCallValue', 0)))
+    call_value = getattr(t, 'currentCallValue', None)
+    if call_value in (None, ''):
+        call_value = getattr(t, 'minCall', 0)
+    to_call = 0.0 if getattr(t, 'checkButton', False) else _num(call_value)
     pot = _num(getattr(t, 'totalPotValue', 0))
     if not POT_INCLUDES_CURRENT_BETS:
-        pot += hero_bet + sum(p['bet'] for p in players)
+        pot += hero_bet + sum(pl['bet'] for pl in players)
 
-    game = getattr(h, 'GameID', None) if h is not None else None
-    mem = _hand_memory.setdefault(game, {})
+    snaps = _hand_memory.get(game, [])
     if len(_hand_memory) > 20:  # only the current hand matters
         for k in list(_hand_memory)[:-5]:
             _hand_memory.pop(k, None)
-    mem[street] = {str(p['seat']): p['bet'] for p in players}
-    mem[street]['0'] = hero_bet
-    history = [{'street': s, 'bets': mem[s]} for s in ('preflop', 'flop', 'turn', 'river') if s in mem and s != street]
-
-    dealer = getattr(t, 'dealer_position', 0)
     return {
-        'heroCards': [str(c) for c in (getattr(t, 'mycards', None) or [])],
+        'gameId': game, 'heroCards': [str(c) for c in (getattr(t, 'mycards', None) or [])],
         'board': board, 'pot': pot, 'toCall': to_call, 'heroStack': _num(getattr(t, 'myFunds', 0)),
-        'heroBet': hero_bet, 'bb': bb, 'nSeats': n, 'dealer': int(_num(dealer, 0)) % n,
-        'players': players, 'history': history,
+        'heroBet': hero_bet, 'bb': bb, 'nSeats': n, 'dealer': dealer,
+        'players': players, 'history': [dict(s) for s in snaps],
     }
+
+
+def remember(state, d):
+    """Store this decision's snapshot (with what we did) for the rest of the hand."""
+    snap = {'street': STREETS.get(len(state['board']), 'river'), 'heroBet': state['heroBet'],
+            'bets': {str(pl['seat']): pl['bet'] for pl in state['players']},
+            'live': [pl['seat'] for pl in state['players'] if pl['inHand']],
+            'hero': {'action': d.get('action'), 'amount': d.get('amount', 0)} if d else None}
+    _hand_memory.setdefault(state['gameId'], []).append(snap)
 
 
 def to_button(d, state, t=None):
@@ -220,7 +319,8 @@ class CoachDecision(Decision):
             state = table_to_state(t, h, p)
             if len(state['heroCards']) != 2:
                 raise ValueError('hero cards not read')
-            d = Brain.get().ask(state)
+            d = (getattr(t, 'coach_brain', None) or Brain.get()).ask(state)
+            remember(state, d)
             self.coach = d
             self.decision = to_button(d, state, t)
             t.currentBluff = 1 if d.get('tag') in ('BLUFF', 'SEMI-BLUFF') else 0
@@ -230,3 +330,8 @@ class CoachDecision(Decision):
             log.warning("Coach brain failed (%s); using dickreuter's decision", e)
             self.coach = None
             super().make_decision(t, h, p, l)
+            try:  # still remember the snapshot so later streets know what happened
+                remember(state, {'action': {'Fold': 'FOLD', 'Check': 'CHECK', 'Call': 'CALL'}.get(self.decision, 'RAISE'),
+                                 'amount': _num(getattr(t, 'minBet', 0))})
+            except Exception:
+                pass

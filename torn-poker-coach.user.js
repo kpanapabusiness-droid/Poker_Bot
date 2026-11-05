@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn Poker Coach
 // @namespace    keanu.poker.coach
-// @version      0.6.2
+// @version      0.7.0
 // @description  Live poker coach for Torn: tells you what to do and how much (value, bluff, semi-bluff), with equity, odds, positions and opponent ranges. Display only — never clicks or acts.
 // @match        https://www.torn.com/page.php?sid=holdem*
 // @require      https://raw.githubusercontent.com/kpanapabusiness-droid/Poker_Bot/main/poker-engine.js
@@ -9,6 +9,7 @@
 // @require      https://raw.githubusercontent.com/kpanapabusiness-droid/Poker_Bot/main/strategy.js
 // @require      https://raw.githubusercontent.com/kpanapabusiness-droid/Poker_Bot/main/tracker.js
 // @require      https://raw.githubusercontent.com/kpanapabusiness-droid/Poker_Bot/main/logger.js
+// @require      https://raw.githubusercontent.com/kpanapabusiness-droid/Poker_Bot/main/solver.js
 // @grant        GM_registerMenuCommand
 // @run-at       document-idle
 // ==/UserScript==
@@ -24,7 +25,7 @@
   'use strict';
   const E = window.PokerEngine, A = window.TornAdapter, S = window.PokerStrategy, T = window.PokerTracker, L = window.PokerLogger;
   if (!E || !A || !S || !T || !L) { console.warn('[PokerCoach] engine/adapter/strategy/tracker/logger not loaded — check the @require lines.'); return; }
-  const VERSION = '0.6.2';
+  const VERSION = '0.7.0';
   console.info(`[PokerCoach] v${VERSION} running — display-only poker assistant: reads this table, makes no requests, never clicks or acts.`);
 
   // ─────────────────────────── Opponent tracker (Phase 3) ───────────────────────────
@@ -96,6 +97,8 @@
   const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
   const without = (combos, remove) => { const k = new Set(remove.map(([a, b]) => a * 52 + b)); return combos.filter(([a, b]) => !k.has(a * 52 + b)); };
 
+  // How we assume the hero plays, to give the river solver a range for us: a solid regular.
+  const HERO_PROFILE = { vpip: 0.25, pfr: 0.2, threeBet: 0.08, af: 2.5, f2b: 0.4, wtsd: 0.3 };
   function villainRange(action, position, est) {
     const pfrW = clamp(est.pfr * (POS_WIDTH[position] || 1), 0.03, 0.8);
     switch (action) {
@@ -149,7 +152,7 @@
       const est = tracker.estimate(p.name);
       const r = villainRange(pf[p.name], pos[p.slot], est);
       return applyPostflop({ name: p.name, slot: p.slot, position: pos[p.slot] || '?', stack: p.stack, bet: p.bet,
-        est, foldOverride: est.f2b, ...r }, state.actions, state.board, est);
+        est, foldOverride: est.f2b, aggression: est.af, ...r }, state.actions, state.board, est);
     });
     const key = [state.handId, state.heroCards, state.board, state.pot, state.toCall, state.heroStack, villains.map(v => v.name + v.label + v.bet + v.est.hands)].join('|');
     if (key === lastKey) return lastResult; // only recompute when something changed
@@ -164,7 +167,18 @@
       heroStack: state.heroStack, heroBet: state.heroBet, bb, position: pos[0] || 'CO', inPosition,
       heroName: heroP && heroP.name, actions: state.actions, villains,
     };
-    const d = S.decide(ctx);
+    let d = S.decide(ctx);
+    // Heads-up on the river: the solver plays a balanced mix against their range (optional: needs solver.js).
+    const PS = window.PokerSolver;
+    if (PS && ctx.board.length === 5 && villains.length === 1) {
+      try {
+        const name = heroP && heroP.name;
+        let hr = villainRange(pf[name], pos[0], HERO_PROFILE);
+        hr = applyPostflop({ name, ...hr }, state.actions, state.board, HERO_PROFILE);
+        const sv = PS.adviseRiver(ctx, { heroRange: hr.combos, seed: state.handId, iterations: 120, timeLimitMs: 450 });
+        if (sv) d = { ...sv, equity: d.equity, eqWhenCalled: d.eqWhenCalled };
+      } catch (e) { console.warn('[PokerCoach] river solver failed', e); }
+    }
     // Effective stack = what's still playable between hero and the deepest opponent. An opponent who is
     // all-in has 0 behind, which correctly gives SPR 0 (no more betting) rather than falling back to hero's stack.
     const eff = villains.length ? Math.min(state.heroStack + state.heroBet, Math.max(...villains.map(v => (v.stack || 0) + (v.bet || 0)))) : null;
@@ -176,7 +190,7 @@
   // ─────────────────────────── Panel UI ───────────────────────────
   const ACTION_COLORS = { RAISE: '#3b82f6', BET: '#3b82f6', 'ALL-IN': '#a855f7', CALL: '#22c55e', CHECK: '#a3a3a3', FOLD: '#ef4444' };
   const TAG_COLORS = { VALUE: '#22c55e', 'SEMI-BLUFF': '#f59e0b', BLUFF: '#f97316', PROTECTION: '#38bdf8', 'POT CONTROL': '#a3a3a3',
-    CALL: '#22c55e', FOLD: '#ef4444', CHECK: '#a3a3a3', CHART: '#94a3b8', 'PUSH/FOLD': '#a855f7' };
+    CALL: '#22c55e', FOLD: '#ef4444', CHECK: '#a3a3a3', CHART: '#94a3b8', 'PUSH/FOLD': '#a855f7', SOLVER: '#eab308' };
   // The panel lives in an OPEN shadow root purely so Torn's stylesheets can't restyle it. It hides nothing:
   // the host is a normal element with an id and data-poker-coach attributes, and host.shadowRoot is readable by the page.
   const host = document.createElement('div');

@@ -61,6 +61,21 @@
   const pct = x => Math.round(x * 100) + '%';
 
   /** Probability a casual player folds to a bet/raise that is `f` times the pot. */
+  /**
+   * How often this villain folds to our bet/raise. A tracked fold-to-bet rate is mostly made of
+   * spots where they checked or called; it says little about a player who has just bet and faces
+   * a raise. So when they have chips in (we're raising their bet) we use the vs-raise model, scaled
+   * by how often they bluff (aggression): a passive player who bets has it.
+   */
+  function villainFold(v, f, street, facing) {
+    if (facing && (v.bet || 0) > 0) {
+      const p = foldProb(f, { street, vsRaise: true });
+      const k = v.aggression != null ? clamp(0.45 + 0.2 * v.aggression, 0.5, 1.15) : 1;
+      return clamp(p * k, 0, MODEL.fold.max);
+    }
+    return foldProb(f, { street, vsRaise: facing, override: v.foldOverride != null ? clamp(v.foldOverride + 0.25 * (f - 0.5), 0, 0.95) : null });
+  }
+
   function foldProb(f, { street, vsRaise, model = MODEL.fold, override } = {}) {
     if (override != null) return override;
     let p = model.base + model.slope * f;
@@ -251,7 +266,7 @@
       const totalTo = ctx.heroBet + add;
       const villainCall = Math.max(0, totalTo - maxBet); // what the bettor (or a checker) must add to continue
       const f = villainCall / (pot + add);
-      const folds = villains.map((v, i) => foldProb(f, { street, vsRaise: facing, override: v.foldOverride != null ? clamp(v.foldOverride + 0.25 * (f - 0.5), 0, 0.95) : null }));
+      const folds = villains.map(v => villainFold(v, f, street, facing));
       const allFold = folds.reduce((p, x) => p * x, 1);
       const contRanges = tables.map((t, i) => continuing(t, folds[i]));
       const nCallers = Math.max(1, folds.reduce((n, x) => n + (1 - x), 0));

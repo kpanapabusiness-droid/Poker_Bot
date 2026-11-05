@@ -55,6 +55,28 @@ def main(repo):
           'd = CoachDecision(table, history, strategy, self.game_logger)  # poker-coach',
           'CoachDecision(table, history, strategy, self.game_logger)')
 
+    # dickreuter's "fast fold" clicks Fold preflop by itself for any hand missing from its preflop
+    # sheet, before any decision maker runs, so the coach would never see those hands.
+    patch(main_py,
+          '                        table.check_fast_fold(history, strategy, mouse) and \\\n',
+          "                        (True or 'poker-coach: fast fold off') and \\\n",
+          'poker-coach: fast fold off')
+    # dickreuter also runs a small web server on port 8005 that hands out screenshots of your screen
+    # to its website (deepermind-pokerbot.com is allowed to call it from your browser). Not needed.
+    patch(main_py,
+          '    t2 = threading.Thread(target=local_restapi)\n    t2.daemon = True\n    t2.start()\n',
+          '    # poker-coach: screenshot web server (port 8005) for deepermind-pokerbot.com switched off\n',
+          'poker-coach: screenshot web server')
+
+    # dickreuter's curve fitting passes plain lists to lmfit; lmfit 1.3+ no longer converts them,
+    # so every Decision crashed with "can only concatenate list". Use numpy arrays.
+    cf = os.path.join(pkg, 'decisionmaker', 'curvefitting.py')
+    patch(cf,
+          '        xf = [minEquity, max_X]\n        yf = [bigBlind, maxValue]\n',
+          '        xf = np.array([minEquity, max_X], dtype=float)  # poker-coach: lmfit 1.3 fix\n'
+          '        yf = np.array([bigBlind, maxValue], dtype=float)\n',
+          'poker-coach: lmfit 1.3 fix')
+
     sh = os.path.join(pkg, 'tools', 'strategy_handler.py')
     patch(sh,
           "        if 'collusion' not in self.selected_strategy:\n            self.selected_strategy['collusion'] = 1\n",
