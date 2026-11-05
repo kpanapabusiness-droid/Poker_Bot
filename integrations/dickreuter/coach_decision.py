@@ -25,6 +25,7 @@ except ImportError:  # standalone (tests)
     Decision = object
 
 log = logging.getLogger(__name__)
+log.setLevel(logging.INFO)  # dickreuter sets the root logger to WARNING, which would hide the Coach lines
 
 STREETS = {0: 'preflop', 3: 'flop', 4: 'turn', 5: 'river'}
 
