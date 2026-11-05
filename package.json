@@ -8,7 +8,7 @@
   },
   "scripts": {
     "test": "node test-engine.js && node test/test-adapter.js && node test/test-strategy.js && node test/test-tracker.js && node test/test-logger.js && node test/test-overlay.js && node test/test-report-ui.js && node test/test-security.js && node test/test-panel.js",
-    "test:dickreuter": "python3 integrations/dickreuter/test_coach_decision.py"
+    "test:dickreuter": "python3 integrations/dickreuter/test_coach_decision.py && python3 integrations/dickreuter/test_local_server.py"
   },
   "repository": {
     "type": "git",

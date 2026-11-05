@@ -11,6 +11,8 @@ and points main.py at it. Set POKER_COACH_BRAIN to the path of brain.js if your 
 side by side.
 """
 import atexit
+import csv
+import datetime
 import json
 import logging
 import math
@@ -97,12 +99,22 @@ def _find_brain(start):
 _hand_memory = {}
 
 
-def table_to_state(t, h=None):
-    """dickreuter TableScreenBased (+ History) → the JSON brain.js expects."""
+def _big_blind(t, p):
+    try:
+        bb = float(p.selected_strategy['bigBlind'])  # dickreuter keeps the blinds in the strategy
+        if bb > 0:
+            return bb
+    except Exception:
+        pass
+    return _num(getattr(t, 'bigBlind', 0)) or 1.0
+
+
+def table_to_state(t, h=None, p=None):
+    """dickreuter TableScreenBased (+ History, strategy) → the JSON brain.js expects."""
     board = [str(c) for c in (getattr(t, 'cardsOnTable', None) or [])]
     street = STREETS.get(len(board), 'river')
     n = int(_num(getattr(t, 'total_players', 6), 6)) or 6
-    bb = _num(getattr(t, 'bigBlind', 0)) or 1.0
+    bb = _big_blind(t, p)
     hero_bet = _num(getattr(t, 'bot_pot', 0))
 
     players = []
@@ -166,12 +178,46 @@ def to_button(d, state, t=None):
     return min(choices, key=lambda k: abs(math.log(max(choices[k], 1e-6) / max(target, 1e-6))))
 
 
+# One row per decision, kept on your PC. report.py joins it with the hand results.
+LOG_DIR = os.environ.get('POKER_COACH_LOG_DIR') or os.path.join(os.path.expanduser('~'), 'poker', 'logs')
+DECISION_FIELDS = ['time', 'game_id', 'street', 'position', 'in_position', 'hero_cards', 'board', 'pot', 'to_call',
+                   'hero_stack', 'bb', 'opponents', 'action', 'amount', 'tag', 'equity', 'ev', 'button', 'reason']
+
+
+def log_decision(state, d, button, game_id):
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        path = os.path.join(LOG_DIR, 'coach_decisions.csv')
+        new = not os.path.exists(path)
+        opts = d.get('options') or []
+        best = next((o for o in opts if o.get('action') == d.get('action') and o.get('amount') == d.get('amount')), None) \
+            or next((o for o in opts if o.get('action') == d.get('action')), {})
+        row = {
+            'time': datetime.datetime.now().isoformat(timespec='seconds'), 'game_id': game_id,
+            'street': STREETS.get(len(state['board']), 'river'), 'position': d.get('position'),
+            'in_position': d.get('inPosition'), 'hero_cards': ' '.join(state['heroCards']),
+            'board': ' '.join(state['board']), 'pot': state['pot'], 'to_call': state['toCall'],
+            'hero_stack': state['heroStack'], 'bb': state['bb'],
+            'opponents': sum(1 for p in state['players'] if p['inHand']), 'action': d.get('action'),
+            'amount': d.get('amount'), 'tag': d.get('tag'),
+            'equity': round(d['equity'], 4) if isinstance(d.get('equity'), (int, float)) else '',
+            'ev': best.get('ev', ''), 'button': button, 'reason': d.get('reason'),
+        }
+        with open(path, 'a', newline='', encoding='utf-8') as f:
+            w = csv.DictWriter(f, fieldnames=DECISION_FIELDS)
+            if new:
+                w.writeheader()
+            w.writerow(row)
+    except Exception as e:  # logging must never stop the bot
+        log.warning("couldn't write the decision log: %s", e)
+
+
 class CoachDecision(Decision):
     """Drop-in replacement for dickreuter's Decision: same constructor, same attributes."""
 
     def make_decision(self, t, h, p, l):
         try:
-            state = table_to_state(t, h)
+            state = table_to_state(t, h, p)
             if len(state['heroCards']) != 2:
                 raise ValueError('hero cards not read')
             d = Brain.get().ask(state)
@@ -179,6 +225,7 @@ class CoachDecision(Decision):
             self.decision = to_button(d, state, t)
             t.currentBluff = 1 if d.get('tag') in ('BLUFF', 'SEMI-BLUFF') else 0
             log.info("Coach: %s [%s] — %s → button %s", d.get('text'), d.get('tag'), d.get('reason'), self.decision)
+            log_decision(state, d, self.decision, getattr(h, 'GameID', ''))
         except Exception as e:  # never stall the bot: use dickreuter's own logic for this one
             log.warning("Coach brain failed (%s); using dickreuter's decision", e)
             self.coach = None

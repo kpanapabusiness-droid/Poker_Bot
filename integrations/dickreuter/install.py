@@ -11,12 +11,16 @@ What it changes (idempotent, keeps a .orig backup of each file it edits):
      your hole cards to the DeeperMind server and pulls in cards from other copies of the bot at the
      same table. That's card-sharing, not AI assistance: it isn't allowed even in a game where
      everyone has agreed to AI help.
+  4. config.ini: points dickreuter's database at local_server.py on 127.0.0.1 instead of
+     dickreuter.com, so tables, strategies and hand logs stay on your PC.
 """
 import os
+import re
 import shutil
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+LOCAL_DB = 'http://127.0.0.1:7778/'
 
 
 def patch(path, old, new, marker):
@@ -56,6 +60,21 @@ def main(repo):
           "        if 'collusion' not in self.selected_strategy:\n            self.selected_strategy['collusion'] = 1\n",
           "        self.selected_strategy['collusion'] = 0  # poker-coach: never share cards with other bots\n",
           "poker-coach: never share cards")
+
+    # 4. Point dickreuter at the local database (local_server.py) instead of dickreuter.com.
+    for ini in ('config.ini', 'config_default.ini'):
+        path = os.path.join(pkg, ini)
+        if not os.path.exists(path):
+            continue
+        src = open(path, encoding='utf-8').read()
+        new = re.sub(r'(?m)^db\s*=.*$', f'db = {LOCAL_DB}', src)
+        if new != src:
+            if not os.path.exists(path + '.orig'):
+                shutil.copy(path, path + '.orig')
+            open(path, 'w', encoding='utf-8').write(new)
+            print(f"  patched: {os.path.relpath(path)} (db -> {LOCAL_DB})")
+        else:
+            print(f"  already patched: {os.path.relpath(path)}")
 
     os.environ.setdefault('POKER_COACH_BRAIN', os.path.join(HERE, 'brain.js'))
     print(f"\nDone. Before running dickreuter, set:\n  POKER_COACH_BRAIN={os.path.join(HERE, 'brain.js')}\n"

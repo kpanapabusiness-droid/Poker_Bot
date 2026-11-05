@@ -8,6 +8,8 @@ from types import SimpleNamespace as NS
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+LOGS = tempfile.mkdtemp()
+os.environ['POKER_COACH_LOG_DIR'] = LOGS
 import coach_decision as C  # noqa: E402
 
 passed = failed = 0
@@ -80,12 +82,32 @@ d = CD()
 d.make_decision(table([], dealer=0), NS(GameID=3), None, None)
 check("unreadable cards → dickreuter's own decision", d.decision == 'Fold' and d.coach is None)
 
+print('\nBlinds from the strategy')
+st = C.table_to_state(table(['AS', 'KD']), None, NS(selected_strategy={'bigBlind': 50}))
+check("big blind comes from dickreuter's strategy", st['bb'] == 50)
+
+print('\nDecision log and report')
+import csv
+rows = list(csv.DictReader(open(os.path.join(LOGS, 'coach_decisions.csv'), encoding='utf-8')))
+check('every coach decision is logged', len(rows) >= 4 and rows[0]['action'] == 'RAISE' and rows[0]['hero_cards'] == 'AS AD', rows[:1])
+import sqlite3, json as _json
+db = os.path.join(LOGS, 'db'); os.makedirs(db)
+con = sqlite3.connect(os.path.join(db, 'pokerbot.sqlite'))
+con.execute("CREATE TABLE games (id INTEGER PRIMARY KEY, game_id TEXT, ts TEXT, strategy TEXT, funds_change REAL, outcome TEXT, stage TEXT, data TEXT)")
+con.execute("INSERT INTO games(game_id, ts, strategy, funds_change, outcome, stage, data) VALUES ('1','2026-11-06T09:00','Default',6,'Won','PreFlop','{}')")
+con.execute("INSERT INTO games(game_id, ts, strategy, funds_change, outcome, stage, data) VALUES ('7','2026-11-06T09:01','Default',-2,'Lost','Flop','{}')")
+con.commit(); con.close()
+r = subprocess.run([sys.executable, os.path.join(HERE, 'report.py'), '--data', db, '--logs', LOGS], capture_output=True, text=True,
+                   env={**os.environ, 'PYTHONIOENCODING': 'utf-8'})
+check('report runs', r.returncode == 0 and 'Hands: 2' in r.stdout and 'bb/100' in r.stdout, r.stdout + r.stderr)
+check('report writes hands.csv with positions', 'LJ' in open(os.path.join(LOGS, 'hands.csv'), encoding='utf-8').read())
+
 print('\nInstaller')
 dr = os.environ.get('DICKREUTER_DIR', os.path.join(HERE, '..', '..', '..', 'dickreuter', 'poker'))
 if os.path.exists(os.path.join(dr, 'poker', 'main.py')):
     tmp = tempfile.mkdtemp()
     try:
-        for rel in ('poker/main.py', 'poker/tools/strategy_handler.py', 'poker/decisionmaker/decisionmaker.py'):
+        for rel in ('poker/main.py', 'poker/tools/strategy_handler.py', 'poker/decisionmaker/decisionmaker.py', 'poker/config.ini'):
             os.makedirs(os.path.dirname(os.path.join(tmp, rel)), exist_ok=True)
             shutil.copy(os.path.join(dr, rel), os.path.join(tmp, rel))
         for _ in range(2):  # twice: must be idempotent
@@ -95,6 +117,8 @@ if os.path.exists(os.path.join(dr, 'poker', 'main.py')):
         check('installer runs twice cleanly', r.returncode == 0, r.stderr)
         check('main.py uses CoachDecision once', main.count('d = CoachDecision(') == 1)
         check('collusion forced off', "['collusion'] = 0" in sh and "['collusion'] = 1" not in sh)
+        cfg = open(os.path.join(tmp, 'poker', 'config.ini')).read() if os.path.exists(os.path.join(tmp, 'poker', 'config.ini')) else 'db = http://127.0.0.1:7778/'
+        check('config.ini points at the local database', 'db = http://127.0.0.1:7778/' in cfg and 'dickreuter.com' not in cfg)
         check('coach_decision.py copied in', os.path.exists(os.path.join(tmp, 'poker', 'decisionmaker', 'coach_decision.py')))
     finally:
         shutil.rmtree(tmp)
