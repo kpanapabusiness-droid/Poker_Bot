@@ -14,6 +14,7 @@ A live poker coaching overlay. It shows the numbers you forget mid-hand: equity,
 | `tracker.js` | Learns every opponent from finished hands in the game log. It tracks VPIP, PFR, 3-bet %, aggression, fold-to-bet, went-to-showdown and shown hands. Small samples are blended towards an average casual player. Players get labelled Calling Station / Maniac / Fish / Nit / Rock / TAG / LAG / Average. Stats are saved in your browser. |
 | `logger.js` | Hand and decision logger. For every hand it records the coach's advice and what you did, whether you followed it, the **EV you lost** by deviating, and the result. It builds the Report view (session and all-time results, bb/100, follow rate, EV lost, your habits vs the coach, costliest decisions, results by position) and a CSV export. |
 | `torn-poker-coach.user.js` | Tampermonkey overlay showing the exact action and size, why, the tag, fold needed vs expected (for bluffs), every option's EV, equity, SPR, IP/OOP, positions and each opponent's estimated range. |
+| `integrations/dickreuter/` | Plugs `strategy.js` into the dickreuter/poker bot for the friends' AI-allowed tournament: replaces its threshold decisions, forces its card-sharing off. See its README. |
 | `test-engine.js`, `test/` | Tests. `test/fixtures/` holds real (anonymised) Torn table snapshots. |
 | `docs/poker-coach-plan.md` | Full build plan, decisions, phases and next steps |
 

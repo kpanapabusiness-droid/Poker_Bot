@@ -1,0 +1,68 @@
+"""
+install.py — plug this project's decision layer into a dickreuter/poker checkout.
+
+    python install.py /path/to/dickreuter/poker
+
+What it changes (idempotent, keeps a .orig backup of each file it edits):
+  1. Copies coach_decision.py into poker/decisionmaker/.
+  2. main.py: builds a CoachDecision instead of dickreuter's Decision. The original logic is still
+     used as a fallback if the brain errors.
+  3. strategy_handler.py: forces collusion OFF. dickreuter ships with it ON by default, which uploads
+     your hole cards to the DeeperMind server and pulls in cards from other copies of the bot at the
+     same table. That's card-sharing, not AI assistance: it isn't allowed even in a game where
+     everyone has agreed to AI help.
+"""
+import os
+import shutil
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def patch(path, old, new, marker):
+    src = open(path, encoding='utf-8').read()
+    if marker in src:
+        print(f"  already patched: {os.path.relpath(path)}")
+        return
+    if old not in src:
+        sys.exit(f"Couldn't find the expected code in {path}. dickreuter may have changed; patch it by hand:\n  {old!r} → {new!r}")
+    if not os.path.exists(path + '.orig'):
+        shutil.copy(path, path + '.orig')
+    open(path, 'w', encoding='utf-8').write(src.replace(old, new, 1))
+    print(f"  patched: {os.path.relpath(path)}")
+
+
+def main(repo):
+    pkg = os.path.join(repo, 'poker')
+    if not os.path.exists(os.path.join(pkg, 'decisionmaker', 'decisionmaker.py')):
+        sys.exit(f"{repo} doesn't look like a dickreuter/poker checkout")
+
+    shutil.copy(os.path.join(HERE, 'coach_decision.py'), os.path.join(pkg, 'decisionmaker', 'coach_decision.py'))
+    print("  copied: poker/decisionmaker/coach_decision.py")
+
+    main_py = os.path.join(pkg, 'main.py')
+    patch(main_py,
+          'from poker.decisionmaker.decisionmaker import Decision\n',
+          'from poker.decisionmaker.decisionmaker import Decision\n'
+          'from poker.decisionmaker.coach_decision import CoachDecision  # poker-coach brain\n',
+          'CoachDecision  # poker-coach brain')
+    patch(main_py,
+          'd = Decision(table, history, strategy, self.game_logger)',
+          'd = CoachDecision(table, history, strategy, self.game_logger)  # poker-coach',
+          'CoachDecision(table, history, strategy, self.game_logger)')
+
+    sh = os.path.join(pkg, 'tools', 'strategy_handler.py')
+    patch(sh,
+          "        if 'collusion' not in self.selected_strategy:\n            self.selected_strategy['collusion'] = 1\n",
+          "        self.selected_strategy['collusion'] = 0  # poker-coach: never share cards with other bots\n",
+          "poker-coach: never share cards")
+
+    os.environ.setdefault('POKER_COACH_BRAIN', os.path.join(HERE, 'brain.js'))
+    print(f"\nDone. Before running dickreuter, set:\n  POKER_COACH_BRAIN={os.path.join(HERE, 'brain.js')}\n"
+          "and make sure `node` is on your PATH. Untick auto-act to see each decision before it's played.")
+
+
+if __name__ == '__main__':
+    if len(sys.argv) != 2:
+        sys.exit(__doc__)
+    main(os.path.abspath(sys.argv[1]))
