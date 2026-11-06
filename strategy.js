@@ -24,6 +24,20 @@
     fold: { base: 0.26, slope: 0.30, max: 0.78, riverBonus: 0.06, vsRaiseBonus: 0.06, multiwayPenalty: 0.0 },
     // Share of your equity you actually realise before showdown (position + future streets).
     realise: { ip: 0.95, oop: 0.85, river: 1.0 },
+    // Hand-aware realisation (6 Nov): out of position you act first every street, so opponents bet you
+    // off your equity; how much you lose depends on the hand. on:false goes back to the flat numbers above.
+    realiseHand: {
+      on: false,
+      oop: { flop: 0.78, turn: 0.86 }, ip: { flop: 0.98, turn: 1.0 },
+      draw: 0.08,       // flush draws / open-enders keep their equity better (and win big pots)
+      weakMade: -0.08,  // second pair and worse: hard to play, often folded by the river
+      multiway: -0.04,  // per extra opponent
+      preflop: { pair: 0.05, suited: 0.05, connected: 0.03, offsuitJunk: -0.08 },
+      min: 0.55, max: 1.05,
+    },
+    // Out of position after calling preflop, don't lead into the raiser on the flop with less than a
+    // value hand: check and let them c-bet (they bet most flops), then check-raise or call.
+    noDonk: false,
     betSizes: [0.33, 0.5, 0.75, 1.0],
     raiseMultipliers: [2.5, 3.5],
     equityIters: 3000,
@@ -58,6 +72,41 @@
   const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
   const roundTo = (x, step) => (step > 0 ? Math.max(step, Math.round(x / step) * step) : Math.round(x));
   const money = x => '$' + Math.round(x).toLocaleString();
+
+  /** Share of preflop equity a big blind defender keeps out of position, by hand shape ('KJo', '76s', '55'). */
+  function preflopRealise(hc) {
+    const RH = MODEL.realiseHand;
+    if (!RH.on) return MODEL.realise.oop;
+    const order = '23456789TJQKA';
+    const pair = hc.length === 2 || hc[0] === hc[1];
+    const suited = hc[2] === 's';
+    const gap = Math.abs(order.indexOf(hc[0]) - order.indexOf(hc[1])) - 1;
+    let r = RH.oop.flop;
+    if (pair) r += RH.preflop.pair;
+    if (suited) r += RH.preflop.suited;
+    if (!pair && gap <= 1) r += RH.preflop.connected;
+    if (!pair && !suited && gap >= 2 && order.indexOf(hc[0]) < 10 + (hc[0] === 'A' ? 2 : 0)) r += RH.preflop.offsuitJunk;
+    return clamp(r, RH.min, RH.max);
+  }
+
+  /** Share of equity we keep to showdown postflop (position, street, hand type, number of opponents). */
+  function postflopRealise(ip, street, feat, nOpp) {
+    if (street === 'river') return MODEL.realise.river;
+    const RH = MODEL.realiseHand;
+    if (!RH.on) return ip ? MODEL.realise.ip : MODEL.realise.oop;
+    let r = (ip ? RH.ip : RH.oop)[street] ?? (ip ? MODEL.realise.ip : MODEL.realise.oop);
+    if (feat.draw) r += RH.draw;
+    if (feat.improved && feat.made >= 1 && !feat.topPairPlus && !feat.draw) r += RH.weakMade * (ip ? 0.5 : 1);
+    r += RH.multiway * Math.max(0, nOpp - 1);
+    return clamp(r, RH.min, RH.max);
+  }
+
+  /** Did someone other than hero make the last preflop raise (and are they still in the hand)? */
+  function villainHasInitiative(ctx) {
+    const pf = parsePreflop(ctx.actions, ctx.heroName);
+    if (!pf.lastRaiser || pf.lastRaiser === ctx.heroName) return false;
+    return ctx.villains.some(v => v.name === pf.lastRaiser);
+  }
   const pct = x => Math.round(x * 100) + '%';
 
   /** Probability a casual player folds to a bet/raise that is `f` times the pot. */
@@ -183,7 +232,7 @@
         const openRange = opener && opener.combos && opener.combos.length ? opener.combos : E.rfiRange(oPos === 'BB' ? 'SB' : oPos);
         const eq = heroEquity(hero, [], [openRange], 2500);
         const need = price / (ctx.pot + price);
-        if (eq * MODEL.realise.oop >= need)
+        if (eq * preflopRealise(hc) >= need)
           return out('CALL', price, 'CHART', `Defend the big blind: ${pct(eq)} vs their range, you need ${pct(need)}`);
       }
       return out('FOLD', 0, 'CHART', `${hc} doesn't play well vs a ${oPos} raise — fold`);
@@ -233,9 +282,9 @@
     const eff = effectiveStack(ctx);
     const heroAll = ctx.heroStack; // what hero can still add
     const ip = ctx.inPosition != null ? ctx.inPosition : ['BTN', 'CO'].includes(ctx.position);
-    const real = street === 'river' ? MODEL.realise.river : ip ? MODEL.realise.ip : MODEL.realise.oop;
     const dead = [...hero, ...board];
     const villains = ctx.villains.length ? ctx.villains : [{ name: '?', combos: null, stack: eff, bet: 0 }];
+    const real = postflopRealise(ip, street, E.handFeatures(hero, board), villains.length);
     const tables = villains.map(v => strengthTable(v.combos || E.allCombos(), board, dead));
     const baseRanges = tables.map(t => t.map(x => x.c));
     const eq = heroEquity(hero, board, baseRanges, MODEL.equityIters * 2);
@@ -297,6 +346,11 @@
       if (alt) best = alt;
     }
     if (best.action === 'CALL' && best.ev < 0) best = options.find(o => o.action === 'FOLD') || best;
+    // Out of position on the flop vs the preflop raiser: check everything but value hands to them.
+    if (MODEL.noDonk && !ip && !facing && street === 'flop' && best.action === 'BET' && villainHasInitiative(ctx)) {
+      const value = best.eqC != null && best.eqC >= 0.6 && (feat.topPairPlus || feat.made >= 2);
+      if (!value) best = options.find(o => o.action === 'CHECK') || best;
+    }
 
     // Explain it
     let tag = 'CHART', reason;

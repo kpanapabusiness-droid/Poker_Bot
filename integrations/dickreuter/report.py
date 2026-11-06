@@ -25,13 +25,31 @@ def _f(v):
 
 
 def _start_stack(d):
-    """Stack at the start of the hand, from the hand's first decision (adding back a posted blind)."""
+    """Stack at the start of the hand, from the hand's first decision (adding back whatever we'd
+    posted: a blind, or the big blind Torn makes you post to sit back in). Older logs have no
+    hero_bet column, so the blind is guessed from the position there."""
     stack, bb = _f(d.get('hero_stack')), _f(d.get('bb')) or 0
     if stack is None:
         return None
+    bet = _f(d.get('hero_bet'))
+    if bet is not None:
+        return stack + bet
     if d.get('street') == 'preflop':
         stack += {'BB': bb, 'SB': bb / 2}.get(d.get('position'), 0)
     return stack
+
+
+def _time(d):
+    try:
+        return datetime.datetime.fromisoformat(d['time'])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+# If the next logged hand starts more than this long after this hand's last decision, other hands
+# were played in between (by you, or while the bot wasn't running) and the stack change isn't this
+# hand's alone.
+MAX_GAP = datetime.timedelta(minutes=8)
 
 
 def load(data_dir, log_dir, days=None):
@@ -67,9 +85,19 @@ def load(data_dir, log_dir, days=None):
                 ds[-1]['street'], ds[-1]['street'])
         bb = _f(ds[0]['bb'])
         start = _start_stack(ds[0])
-        nxt = _start_stack(hands[i + 1][1][0]) if i + 1 < len(hands) else None
-        if start is not None and nxt is not None:
+        nxt_d = hands[i + 1][1][0] if i + 1 < len(hands) else None
+        nxt = _start_stack(nxt_d) if nxt_d else None
+        t_last, t_next = _time(ds[-1]), _time(nxt_d) if nxt_d else None
+        close = t_last is not None and t_next is not None and t_next - t_last <= MAX_GAP
+        folded_at = _f(ds[-1].get('hero_stack')) if ds[-1].get('action') == 'FOLD' else None
+        if start is not None and folded_at is not None:
+            # we folded: we lost exactly what we'd put in (chips in front of us aren't in the stack).
+            # The coach is asked at every turn, so a FOLD with nothing after it is where the hand ended.
+            g['result'], g['result_from'] = folded_at - start, 'fold'
+        elif start is not None and nxt is not None and close:
             g['result'], g['result_from'] = nxt - start, 'stacks'
+        elif nxt_d is not None and not close:
+            g['result'], g['result_from'] = None, 'gap'
         elif 'db_result' in g and (not bb or abs(g['db_result']) <= 400 * bb):
             g['result'], g['result_from'] = g['db_result'], 'dickreuter'
         else:

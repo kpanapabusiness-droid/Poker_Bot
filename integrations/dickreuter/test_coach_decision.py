@@ -113,6 +113,44 @@ r = subprocess.run([sys.executable, os.path.join(HERE, 'report.py'), '--data', d
 check('report runs', r.returncode == 0 and 'Hands: 2' in r.stdout and 'bb/100' in r.stdout, r.stdout + r.stderr)
 check('report writes hands.csv with positions', 'LJ' in open(os.path.join(LOGS, 'hands.csv'), encoding='utf-8').read())
 
+print('\nDealer when the small blind completed (Torn, 6 Nov)')
+pl = [{'seat': k, 'bet': 2.0, 'stack': 200.0, 'inHand': True} for k in range(1, 6)]
+check('everyone shows a big blind, nothing to call, first look → we are the BB (dealer 2 seats back)',
+      C.blinds_dealer('sbc1', [], 2.0, 2.0, pl, 6, 0, to_call=0.0) == 4)
+check('same picture with chips to call → not sure, keep the chip read',
+      C.blinds_dealer('sbc2', [], 2.0, 2.0, pl, 6, 0, to_call=2.0) == 0)
+pl2 = [dict(p) for p in pl]; pl2[1]['bet'] = 1.0
+check("a big blind we posted to sit back in doesn't hide a real small blind",
+      C.blinds_dealer('sbc3', [], 2.0, 2.0, pl2, 6, 5, to_call=0.0) == 1)
+
+print('\nReport: results per hand')
+import csv as _csv
+rl = tempfile.mkdtemp()
+F = C.DECISION_FIELDS
+def row(t, g, street, pos, stack, action, bet=''):
+    return {'time': t, 'game_id': g, 'street': street, 'position': pos, 'hero_cards': 'AS KD', 'hero_stack': stack,
+            'bb': 2, 'action': action, 'tag': 'CHART', 'hero_bet': bet}
+rows_ = [row('2026-11-06T10:00:00', 'a', 'preflop', 'HJ', 198, 'CHECK', 2),   # posted 2 to sit back in
+         row('2026-11-06T10:01:00', 'a', 'flop', 'HJ', 190, 'FOLD', 0),        # bet 8 on the flop, then folded
+         row('2026-11-06T10:30:00', 'b', 'preflop', 'CO', 190, 'FOLD', 0),     # 29 min later: hands in between
+         row('2026-11-06T10:31:00', 'c', 'preflop', 'BTN', 190, 'RAISE', 0),
+         row('2026-11-06T10:33:00', 'd', 'preflop', 'SB', 239, 'FOLD', 1)]
+with open(os.path.join(rl, 'coach_decisions.csv'), 'w', newline='') as f:
+    w = _csv.DictWriter(f, fieldnames=F, extrasaction='ignore'); w.writeheader(); w.writerows(rows_)
+r = subprocess.run([sys.executable, os.path.join(HERE, 'report.py'), '--data', rl, '--logs', rl], capture_output=True, text=True,
+                   env={**os.environ, 'PYTHONIOENCODING': 'utf-8'})
+res = {x['game_id']: (x['result'], x['result_from']) for x in _csv.DictReader(open(os.path.join(rl, 'hands.csv'), encoding='utf-8-sig'))}
+check('a fold loses exactly what we put in, posted blind included', res.get('a') == ('-10.0', 'fold'), res)
+check("a fold after a long gap isn't charged for the hands in between", res.get('b') == ('0.0', 'fold'), res)
+check('a won hand comes from the next stack', res.get('c') == ('50.0', 'stacks'), res)
+check('small blind fold costs the small blind', res.get('d') == ('-1.0', 'fold'), res)
+old = os.path.join(rl, 'old.csv')
+with open(old, 'w', newline='') as f:
+    w = _csv.DictWriter(f, fieldnames=F[:-1], extrasaction='ignore'); w.writeheader(); w.writerow(rows_[0])
+C._upgrade_log(old)
+up = list(_csv.DictReader(open(old, encoding='utf-8-sig')))
+check('an older log gets the new hero_bet column without losing rows', len(up) == 1 and 'hero_bet' in up[0] and up[0]['game_id'] == 'a', up)
+
 print('\nInstaller')
 dr = os.environ.get('DICKREUTER_DIR', os.path.join(HERE, '..', '..', '..', 'dickreuter', 'poker'))
 if os.path.exists(os.path.join(dr, 'poker', 'main.py')):

@@ -243,11 +243,16 @@ def _hero_bet(t, h, p, n, dealer, street, bb):
 _dealer_by_game = {}
 
 
-def blinds_dealer(game, board, bb, hero_bet, players, n, chip_dealer):
+def blinds_dealer(game, board, bb, hero_bet, players, n, chip_dealer, to_call=None):
     """Who has the button, worked out from the blinds: the small blind is the one seat with exactly
     half a big blind in front of it preflop, and the dealer is the occupied seat before it (heads-up
     the dealer *is* the small blind). Fixed for the rest of the hand once found. Falls back to the
-    dealer chip the screen reader found (and logs it when the two disagree)."""
+    dealer chip the screen reader found (and logs it when the two disagree).
+
+    When the small blind completed (so nobody shows half a big blind) and it's our first look at the
+    hand with exactly one big blind in front of us and nothing to call, we're the big blind: the
+    dealer is two occupied seats before us. (Torn sometimes shows the D chip where the screen map
+    reads the wrong seat, which put a big blind hand down as EP.)"""
     if game in _dealer_by_game:
         return _dealer_by_game[game]
     if board or not bb:
@@ -255,12 +260,19 @@ def blinds_dealer(game, board, bb, hero_bet, players, n, chip_dealer):
     bets = {0: hero_bet}
     bets.update({pl['seat']: pl['bet'] for pl in players})
     sb = [seat for seat, b in bets.items() if b and abs(b - bb / 2) <= 0.01 * bb]
-    if len(sb) != 1:
-        return chip_dealer
     taken = {0} | {pl['seat'] for pl in players if pl['stack'] > 0 or pl['bet'] > 0 or pl['inHand']}
     ring = sorted(x for x in taken if 0 <= x < n)
-    i = ring.index(sb[0])
-    dealer = sb[0] if len(ring) == 2 else ring[i - 1]
+    if len(sb) == 1:
+        i = ring.index(sb[0]) if sb[0] in ring else None
+        if i is None:
+            return chip_dealer
+        dealer = sb[0] if len(ring) == 2 else ring[i - 1]
+    elif (not sb and to_call is not None and to_call <= 0.01 * bb and abs(hero_bet - bb) <= 0.01 * bb
+          and max(bets.values()) <= bb * 1.01 and game not in _hand_memory and len(ring) >= 2):
+        i = ring.index(0)
+        dealer = ring[i - 1] if len(ring) == 2 else ring[i - 2]
+    else:
+        return chip_dealer
     if dealer != chip_dealer:
         log.info("Dealer from the blinds: seat %s (the dealer chip read said seat %s)", dealer, chip_dealer)
     _dealer_by_game[game] = dealer
@@ -307,7 +319,7 @@ def table_to_state(t, h=None, p=None):
         if not POT_INCLUDES_CURRENT_BETS:
             pot += hero_bet + sum(pl['bet'] for pl in players)
 
-    dealer = blinds_dealer(game, board, bb, hero_bet, players, n, dealer)
+    dealer = blinds_dealer(game, board, bb, hero_bet, players, n, dealer, to_call)
 
     snaps = _hand_memory.get(game, [])
     if len(_hand_memory) > 20:  # only the current hand matters
@@ -394,7 +406,22 @@ def exact_bet(d, state, t=None):
 # One row per decision, kept on your PC. report.py joins it with the hand results.
 LOG_DIR = os.environ.get('POKER_COACH_LOG_DIR') or os.path.join(os.path.expanduser('~'), 'poker', 'logs')
 DECISION_FIELDS = ['time', 'game_id', 'street', 'position', 'in_position', 'hero_cards', 'board', 'pot', 'to_call',
-                   'hero_stack', 'bb', 'opponents', 'action', 'amount', 'tag', 'equity', 'ev', 'button', 'reason']
+                   'hero_stack', 'bb', 'opponents', 'action', 'amount', 'tag', 'equity', 'ev', 'button', 'reason',
+                   'hero_bet']
+
+
+def _upgrade_log(path):
+    """Older logs were written without some columns: rewrite them once with the current header."""
+    with open(path, encoding='utf-8-sig', errors='replace', newline='') as f:
+        r = csv.DictReader(f)
+        if r.fieldnames == DECISION_FIELDS:
+            return
+        rows = list(r)
+    with open(path + '.tmp', 'w', newline='', encoding='utf-8-sig') as f:
+        w = csv.DictWriter(f, fieldnames=DECISION_FIELDS, extrasaction='ignore')
+        w.writeheader()
+        w.writerows(rows)
+    os.replace(path + '.tmp', path)
 
 
 def log_decision(state, d, button, game_id):
@@ -402,6 +429,8 @@ def log_decision(state, d, button, game_id):
         os.makedirs(LOG_DIR, exist_ok=True)
         path = os.path.join(LOG_DIR, 'coach_decisions.csv')
         new = not os.path.exists(path)
+        if not new:
+            _upgrade_log(path)
         opts = d.get('options') or []
         best = next((o for o in opts if o.get('action') == d.get('action') and o.get('amount') == d.get('amount')), None) \
             or next((o for o in opts if o.get('action') == d.get('action')), {})
@@ -415,6 +444,7 @@ def log_decision(state, d, button, game_id):
             'amount': d.get('amount'), 'tag': d.get('tag'),
             'equity': round(d['equity'], 4) if isinstance(d.get('equity'), (int, float)) else '',
             'ev': best.get('ev', ''), 'button': button, 'reason': d.get('reason'),
+            'hero_bet': state.get('heroBet', ''),
         }
         with open(path, 'a', newline='', encoding='utf-8-sig' if not os.path.exists(path) else 'utf-8') as f:
             w = csv.DictWriter(f, fieldnames=DECISION_FIELDS)
