@@ -240,6 +240,36 @@ def _hero_bet(t, h, p, n, dealer, street, bb):
     return _num(v)
 
 
+_dealer_by_game = {}
+
+
+def blinds_dealer(game, board, bb, hero_bet, players, n, chip_dealer):
+    """Who has the button, worked out from the blinds: the small blind is the one seat with exactly
+    half a big blind in front of it preflop, and the dealer is the occupied seat before it (heads-up
+    the dealer *is* the small blind). Fixed for the rest of the hand once found. Falls back to the
+    dealer chip the screen reader found (and logs it when the two disagree)."""
+    if game in _dealer_by_game:
+        return _dealer_by_game[game]
+    if board or not bb:
+        return chip_dealer
+    bets = {0: hero_bet}
+    bets.update({pl['seat']: pl['bet'] for pl in players})
+    sb = [seat for seat, b in bets.items() if b and abs(b - bb / 2) <= 0.01 * bb]
+    if len(sb) != 1:
+        return chip_dealer
+    taken = {0} | {pl['seat'] for pl in players if pl['stack'] > 0 or pl['bet'] > 0 or pl['inHand']}
+    ring = sorted(x for x in taken if 0 <= x < n)
+    i = ring.index(sb[0])
+    dealer = sb[0] if len(ring) == 2 else ring[i - 1]
+    if dealer != chip_dealer:
+        log.info("Dealer from the blinds: seat %s (the dealer chip read said seat %s)", dealer, chip_dealer)
+    _dealer_by_game[game] = dealer
+    if len(_dealer_by_game) > 50:
+        for k in list(_dealer_by_game)[:-10]:
+            _dealer_by_game.pop(k, None)
+    return dealer
+
+
 def table_to_state(t, h=None, p=None):
     """dickreuter TableScreenBased (+ History, strategy) → the JSON brain.js expects."""
     board = [str(c) for c in (getattr(t, 'cardsOnTable', None) or [])]
@@ -276,6 +306,8 @@ def table_to_state(t, h=None, p=None):
         pot = _num(getattr(t, 'totalPotValue', 0))
         if not POT_INCLUDES_CURRENT_BETS:
             pot += hero_bet + sum(pl['bet'] for pl in players)
+
+    dealer = blinds_dealer(game, board, bb, hero_bet, players, n, dealer)
 
     snaps = _hand_memory.get(game, [])
     if len(_hand_memory) > 20:  # only the current hand matters

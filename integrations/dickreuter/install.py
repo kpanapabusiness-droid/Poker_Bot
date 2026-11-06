@@ -379,6 +379,21 @@ def main(repo):
           "                    mouse.mouse_action(mouse_target, table.tlc, action_options)\n",
           "poker-coach: humanize think time")
 
+    # "I'm back" after sitting out: only click it when the bot may act; otherwise wait for you.
+    patch(tsb,
+          '            self.gui_signals.signal_status.emit("I am back found")\n'
+          '            mouse.mouse_action("Imback", self.tlc)\n',
+          '            self.gui_signals.signal_status.emit("I am back found")\n'
+          '            try:  # poker-coach: I\'m back only when acting\n'
+          '                acting = self.gui_signals.ui.auto_act.isChecked()\n'
+          '            except Exception:\n'
+          '                acting = False\n'
+          '            if acting:\n'
+          '                mouse.mouse_action("Imback", self.tlc)\n'
+          '            else:\n'
+          '                log.info("Sitting out - waiting for you to click I\'m back")\n',
+          "poker-coach: I'm back only when acting")
+
     # Show the coach's advice in the bot window's "Last Decision" box, not just the button name
     patch(main_py,
           '        gui_signals.signal_decision.emit(str(d.decision + " " + sheet_name))\n',
