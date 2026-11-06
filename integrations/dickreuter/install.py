@@ -139,6 +139,17 @@ def main(repo):
           "self.big_blind_position_abs_all = (self.dealer_position + 2) % self.total_players  # poker-coach: any table size",
           "poker-coach: any table size")
 
+    # dickreuter "corrected" any call or raise value of 90 or more by subtracting 90 (a fix for one
+    # site's button text). With real chip amounts that turns a $1,000 call into $910. Remove it.
+    ts = os.path.join(pkg, 'scraper', 'table_scraper.py')
+    for what in ('call', 'raise'):
+        patch(ts,
+              f"        if round(self.{what}_value) >= 90:\n"
+              f"            log.warning(\"Correcting {what} value from >90\")\n"
+              f"            self.{what}_value -= 90\n",
+              f"        # poker-coach: removed the '>= 90 → subtract 90' {what} value hack\n",
+              f"poker-coach: removed the '>= 90 → subtract 90' {what} value hack")
+
     sh = os.path.join(pkg, 'tools', 'strategy_handler.py')
     patch(sh,
           "        if 'collusion' not in self.selected_strategy:\n            self.selected_strategy['collusion'] = 1\n",

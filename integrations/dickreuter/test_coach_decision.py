@@ -118,7 +118,7 @@ dr = os.environ.get('DICKREUTER_DIR', os.path.join(HERE, '..', '..', '..', 'dick
 if os.path.exists(os.path.join(dr, 'poker', 'main.py')):
     tmp = tempfile.mkdtemp()
     try:
-        for rel in ('poker/main.py', 'poker/tools/strategy_handler.py', 'poker/decisionmaker/decisionmaker.py', 'poker/decisionmaker/curvefitting.py', 'poker/tools/screen_operations.py', 'poker/tools/mouse_mover.py', 'poker/scraper/table.py', 'poker/scraper/table_screen_based.py', 'poker/config.ini'):
+        for rel in ('poker/main.py', 'poker/tools/strategy_handler.py', 'poker/decisionmaker/decisionmaker.py', 'poker/decisionmaker/curvefitting.py', 'poker/tools/screen_operations.py', 'poker/tools/mouse_mover.py', 'poker/scraper/table.py', 'poker/scraper/table_screen_based.py', 'poker/scraper/table_scraper.py', 'poker/config.ini'):
             os.makedirs(os.path.dirname(os.path.join(tmp, rel)), exist_ok=True)
             shutil.copy(os.path.join(dr, rel), os.path.join(tmp, rel))
         for _ in range(2):  # twice: must be idempotent
@@ -132,6 +132,8 @@ if os.path.exists(os.path.join(dr, 'poker', 'main.py')):
         mm = open(os.path.join(tmp, 'poker', 'tools', 'mouse_mover.py')).read()
         check('"$416,500" reads as 416500, not 416.5', "replace(',', '.')" not in so and "replace(',', '')" in so)
         check('screenshots cover every monitor, clicks shifted to match', 'ImageGrab.grab()' not in so and so.count('all_screens=True') >= 1 and '_screen_origin()' in mm)
+        tsc = open(os.path.join(tmp, 'poker', 'scraper', 'table_scraper.py')).read()
+        check('no more "subtract 90" from call/raise values', '-= 90' not in tsc)
         check('lmfit crash fixed', 'poker-coach: lmfit 1.3 fix' in cf)
         check('fast fold off and screenshot server off', "poker-coach: fast fold off" in main and 'poker-coach: screenshot web server' in main and 't2.start()' not in main)
         check('collusion forced off', "['collusion'] = 0" in sh and "['collusion'] = 1" not in sh)
