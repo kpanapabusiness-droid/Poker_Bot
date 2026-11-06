@@ -342,9 +342,14 @@
 
   function riverSolve(t, ctx, actions, role, villains, opts, base) {
     if (ctx.board.length !== 5 || villains.length !== 1) return null;
-    let hero = villainRange(role.Hero, ctx.position, HERO_PROFILE);
-    hero = applyPostflop({ name: 'Hero', ...hero }, actions, ctx.board, HERO_PROFILE);
-    const r = SOLVER.adviseRiver(ctx, { heroRange: hero.combos, seed: t.gameId || '', ...SOLVER_OPTS, ...(opts.solverOpts || {}) });
+    // our range as the opponent sees it: the same perceived range the rest of the coach uses
+    let heroRange = ctx.heroRange;
+    if (!heroRange) {
+      let hero = villainRange(role.Hero, ctx.position, HERO_PROFILE);
+      hero = applyPostflop({ name: 'Hero', ...hero }, actions, ctx.board, HERO_PROFILE);
+      heroRange = hero.combos;
+    }
+    const r = SOLVER.adviseRiver(ctx, { heroRange, seed: t.gameId || '', ...SOLVER_OPTS, ...(opts.solverOpts || {}) });
     return r ? { ...r, equity: base.equity } : null;
   }
 
