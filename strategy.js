@@ -45,6 +45,17 @@
     // are: callers barely change (so value bets go bigger), tight players fold much more to big bets.
     // overbets: extra bet sizes above the pot.
     exploit: { elastic: false, slopeBase: 0.05, slopeF2b: 0.5, overbets: [] },
+    // Small bets get few folds: nobody folds a big share of hands for a cheap price. Folds are capped
+    // at mdfCap × the share that "minimum defence" allows (bet / (pot + bet)). 0 = off.
+    mdfCap: 1.5,
+    // Raising someone who bet: the hands that call a raise are a stronger slice of their range than a
+    // straight "top (1 − fold)" cut. Equity when called is measured against this share of it. 1 = off.
+    raiseCallShare: 0.6,
+    raiseCallStreets: ['river'],  // where that applies (earlier streets, draws and medium hands call raises too)
+    // A raise that only works as a bluff must beat calling/checking by this share of the pot: the
+    // fold estimate is the least reliable number here, so don't bluff away a hand that can win at showdown
+    // on a thin edge.
+    bluffMargin: 0.10,
     // Stack depth preflop: short (≤ shortBB) drops speculative calls/limps that need deep stacks to
     // pay off; deep (≥ deepBB) adds more of them in position.
     depth: { on: true, shortBB: 40, deepBB: 150, deepFlat: '22-66,A2s-A9s,K9s,Q9s,J9s,T8s,97s,86s,75s,64s,54s' },
@@ -137,14 +148,18 @@
    * by how often they bluff (aggression): a passive player who bets has it.
    */
   function villainFold(v, f, street, facing) {
+    // f = what they must add / the pot after our bet. The share of hands minimum defence lets them
+    // fold is f; nobody folds much more than that to a cheap bet.
+    const cap = MODEL.mdfCap > 0 ? MODEL.mdfCap * f : 1;
     if (facing && (v.bet || 0) > 0) {
       const p = foldProb(f, { street, vsRaise: true });
       const k = v.aggression != null ? clamp(0.45 + 0.2 * v.aggression, 0.5, 1.15) : 1;
-      return clamp(p * k, 0, MODEL.fold.max);
+      return clamp(Math.min(p * k, cap), 0, MODEL.fold.max);
     }
     const X = MODEL.exploit;
     const slope = X.elastic && v.foldOverride != null ? X.slopeBase + X.slopeF2b * v.foldOverride : 0.25;
-    return foldProb(f, { street, vsRaise: facing, override: v.foldOverride != null ? clamp(v.foldOverride + slope * (f - 0.5), 0, 0.95) : null });
+    const p = foldProb(f, { street, vsRaise: facing, override: v.foldOverride != null ? clamp(v.foldOverride + slope * (f - 0.5), 0, 0.95) : null });
+    return Math.min(p, cap);
   }
 
   function foldProb(f, { street, vsRaise, model = MODEL.fold, override } = {}) {
@@ -349,7 +364,9 @@
       const f = villainCall / (pot + add);
       const folds = villains.map(v => villainFold(v, f, street, facing));
       const allFold = folds.reduce((p, x) => p * x, 1);
-      const contRanges = tables.map((t, i) => continuing(t, folds[i]));
+      // Facing a bet, the bettor's calls of our raise come from the strong end of what they bet.
+      const share = facing && (MODEL.raiseCallStreets || []).includes(street) ? MODEL.raiseCallShare : 1;
+      const contRanges = tables.map((t, i) => continuing(t, 1 - (1 - folds[i]) * ((villains[i].bet || 0) > 0 ? share : 1)));
       const nCallers = Math.max(1, folds.reduce((n, x) => n + (1 - x), 0));
       const eqC = heroEquity(hero, board, contRanges, MODEL.equityIters);
       const finalPot = pot + add + villainCall * nCallers;
@@ -373,6 +390,10 @@
       const alt = options.filter(o => o.action === 'CALL' || o.action === 'FOLD' || (o.action === 'ALL-IN' && o.eqC == null)).sort((a, b) => b.ev - a.ev)[0];
       if (alt) best = alt;
     }
+    // Bluff-raising a bettor must clearly beat the passive line (a bluff is a raise whose equity when
+    // called is poor).
+    if (facing && ['RAISE', 'ALL-IN'].includes(best.action) && best.eqC != null && best.eqC < 0.5 && passive
+        && best.ev - passive.ev < MODEL.bluffMargin * pot) best = passive;
     if (best.action === 'CALL' && best.ev < 0) best = options.find(o => o.action === 'FOLD') || best;
     // Out of position on the flop vs the preflop raiser: check everything but value hands to them.
     if (MODEL.noDonk && !ip && !facing && street === 'flop' && best.action === 'BET' && villainHasInitiative(ctx)) {

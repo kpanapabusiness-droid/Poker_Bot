@@ -82,3 +82,25 @@ Both stay in `strategy.js` (`MODEL.realiseHand.on`, `MODEL.noDonk`) for later tu
 The human styles are guesses from what's written about low-stakes player pools. Once the tracker
 has 40+ hands on enough Torn players, `humans.calibrate_from_tracker()` turns their real numbers
 into a "torn" style.
+
+## Fixes from Torn hands (6 Nov, evening)
+
+Two big losses at 25k blinds: Q9 trips shoved over a river lead (−252 bb; calling was right) and
+88 turned into a river bluff-raise of a small bet (−32 bb). Changes:
+
+- `mdfCap` 1.5: folds to a bet are capped at 1.5 × bet/(pot after the bet), so a small bet or raise
+  isn't expected to fold out a quarter of hands.
+- `raiseCallShare` 0.6 on the river (`raiseCallStreets`): when we raise someone who bet the river,
+  their calls come from the strongest 60% of what the straight fold cut would keep.
+- `bluffMargin` 0.10: a raise that's really a bluff must beat calling by 10% of the pot.
+
+| Test (6-handed unless noted, 1,500 decks, same seed) | Change vs without |
+|---|---|
+| All three, tighter calls on every street | −15.3 ± 15.9 (heads-up −3.1 ± 9.2, 9-handed −13.6 ± 14.2) |
+| mdfCap alone | −3.1 ± 9.6 |
+| raiseCallShare alone, every street | −11.7 ± 12.9 |
+| bluffMargin alone | −2.9 ± 9.7 |
+| **All three, tighter calls on the river only (kept)** | **−3.9 ± 11.4** |
+
+Neutral in the simulator and both real hands now play right. The simulated humans call raises
+with top pair a lot, which is why tighter calling ranges on earlier streets cost here.

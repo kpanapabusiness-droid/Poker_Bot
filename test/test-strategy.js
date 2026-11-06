@@ -29,6 +29,11 @@ spot('A4s on BTN vs CO open (3-bet bluff)', { hero: h('As4s'), position: 'BTN', 
 spot('77 on BTN vs CO open, deep (set-mine)', { hero: h('7s7d'), position: 'BTN', pot: 45, toCall: 30, actions: raiseBy('V', 30) }, 'CALL');
 spot('76s on BTN vs CO open, 200bb deep (speculative call)', { hero: h('7s6s'), position: 'BTN', pot: 45, toCall: 30, heroStack: 2000, actions: raiseBy('V', 30), villains: [{ name: 'V', position: 'CO', stack: 2000, bet: 30 }] }, 'CALL');
 spot('76s on BTN vs CO open, 35bb (too short to pay off)', { hero: h('7s6s'), position: 'BTN', pot: 45, toCall: 30, heroStack: 350, actions: raiseBy('V', 30), villains: [{ name: 'V', position: 'CO', stack: 350, bet: 30 }] }, 'FOLD');
+{ // 6 Nov, Torn: trips with a weak kicker vs a river lead from a check-caller → call, don't shove
+  const b = E.parseCards('Qc5c6h4dQd');
+  let c = E.topRange(0.5); c = E.narrowRange(c, b.slice(0, 3), 'call'); c = E.narrowRange(c, b.slice(0, 4), 'call'); c = E.narrowRange(c, b, 'bet');
+  spot('Q9 trips vs a river lead after check-calling the turn (call, raising only gets called by better)', { hero: h('Qh9d'), board: b, pot: 3032220, toCall: 1516110, heroStack: 9104445, bb: 25000, position: 'BTN', street: 'river', inPosition: true, villains: [{ name: 'V', position: 'BB', stack: 4076149, bet: 1516110, combos: c }] }, 'CALL');
+}
 spot('J4o vs an open', { hero: h('Jd4c'), position: 'HJ', pot: 45, toCall: 30, actions: raiseBy('V', 30) }, 'FOLD');
 spot('KK facing a 3-bet', { hero: h('KsKd'), position: 'CO', pot: 140, toCall: 60, heroBet: 30, actions: [...raiseBy('Hero', 30), { type: 'raise', actor: 'V', amount: 60, to: 90 }] }, ['RAISE', 'ALL-IN'], 'VALUE');
 spot('A9o facing a 3-bet', { hero: h('Ad9c'), position: 'CO', pot: 140, toCall: 60, heroBet: 30, actions: [...raiseBy('Hero', 30), { type: 'raise', actor: 'V', amount: 60, to: 90 }] }, 'FOLD');

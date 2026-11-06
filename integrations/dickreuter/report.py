@@ -122,30 +122,36 @@ def summarise(games):
     games = [g for g in games if g['result'] is not None]
     if not games:
         return "Only one hand logged so far - its result is known once the next hand starts."
-    bbs = [g['bb'] for g in games if g['bb']]
-    bb = sorted(bbs)[len(bbs) // 2] if bbs else None
+    # Each hand counts in its own big blinds, so sessions at different stakes add up correctly.
+    for g in games:
+        g['result_bb'] = g['result'] / g['bb'] if g['bb'] else 0.0
+    bb = all(g['bb'] for g in games)
     net = sum(g['result'] for g in games)
-    lines = [f"Hands: {len(games)}   Net: {net:+.2f}" + (f"   ({net / bb:+.1f} bb, {net / bb / len(games) * 100:+.1f} bb/100)" if bb else ""),
+    net_bb = sum(g['result_bb'] for g in games)
+    stakes = sorted({int(g['bb']) for g in games if g['bb']})
+    lines = [f"Hands: {len(games)}   Net: {net:+,.0f}" + (f"   ({net_bb:+.1f} bb, {net_bb / len(games) * 100:+.1f} bb/100)" if bb else "")
+             + (f"   big blinds played: {', '.join(f'{x:,}' for x in stakes)}" if len(stakes) > 1 else ''),
              f"Win/loss per hand is worked out from your stack between hands"
              + (f" ({len(pending)} latest hand not counted yet)" if pending else ''), '']
 
     def table(title, key):
         groups = defaultdict(list)
         for g in games:
-            groups[g[key] or '?'].append(g['result'])
+            groups[g[key] or '?'].append(g)
         lines.append(title)
-        for k, rs in sorted(groups.items(), key=lambda kv: -len(kv[1])):
-            per = f"{sum(rs) / bb / len(rs) * 100:+8.1f} bb/100" if bb else ''
-            lines.append(f"  {k:<16} {len(rs):>5} hands  {sum(rs):+10.2f}  {per}")
+        for k, gs in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+            rb = sum(g['result_bb'] for g in gs)
+            per = f"{rb / len(gs) * 100:+8.1f} bb/100" if bb else ''
+            lines.append(f"  {k:<16} {len(gs):>5} hands  {rb:+9.1f} bb  {per}")
         lines.append('')
 
     table('By position', 'position')
     table('By street the hand ended', 'final_stage')
     table("By the coach's last action", 'last_action')
     lines.append('Biggest losses (worth reviewing with Claude)')
-    for g in sorted(games, key=lambda g: g['result'])[:5]:
+    for g in sorted(games, key=lambda g: g['result_bb'])[:5]:
         lines.append(f"  {g['time'][:16]}  game {g['game_id']}  {g['hero_cards']:<6} {g['position'] or '?':<4} "
-                     f"{g['result']:+.2f}  last: {g['last_action'] or g['final_decision']}")
+                     f"{g['result']:+,.0f} ({g['result_bb']:+.1f} bb)  last: {g['last_action'] or g['final_decision']}")
     return '\n'.join(lines)
 
 
