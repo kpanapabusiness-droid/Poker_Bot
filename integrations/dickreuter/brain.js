@@ -32,6 +32,11 @@
   const T = require(path.join(root, 'tracker.js'));
   const SOLVER = require(path.join(root, 'solver.js'));
 
+  // POKER_COACH_MODEL='{"exploit":{"elastic":true}}' overrides strategy settings (for simulator tests).
+  if (process.env.POKER_COACH_MODEL) {
+    const merge = (dst, src) => { for (const [k, v] of Object.entries(src)) { if (v && typeof v === 'object' && !Array.isArray(v) && dst[k] && typeof dst[k] === 'object') merge(dst[k], v); else dst[k] = v; } };
+    merge(S.MODEL, JSON.parse(process.env.POKER_COACH_MODEL));
+  }
   const PRIOR = T.create({}).estimate('__nobody__'); // the "average casual player" the tracker starts everyone at
   const STREETS = ['preflop', 'flop', 'turn', 'river'];
   const streetOf = board => (board.length === 0 ? 'preflop' : board.length === 3 ? 'flop' : board.length === 4 ? 'turn' : 'river');

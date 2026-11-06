@@ -27,6 +27,8 @@ spot('97s in the LJ behind a limper (limp behind)', { hero: h('9s7s'), position:
 spot('AKo vs a CO open', { hero: h('AhKd'), position: 'BTN', pot: 45, toCall: 30, actions: raiseBy('V', 30) }, 'RAISE', 'VALUE');
 spot('A4s on BTN vs CO open (3-bet bluff)', { hero: h('As4s'), position: 'BTN', pot: 45, toCall: 30, actions: raiseBy('V', 30) }, 'RAISE', 'BLUFF');
 spot('77 on BTN vs CO open, deep (set-mine)', { hero: h('7s7d'), position: 'BTN', pot: 45, toCall: 30, actions: raiseBy('V', 30) }, 'CALL');
+spot('76s on BTN vs CO open, 200bb deep (speculative call)', { hero: h('7s6s'), position: 'BTN', pot: 45, toCall: 30, heroStack: 2000, actions: raiseBy('V', 30), villains: [{ name: 'V', position: 'CO', stack: 2000, bet: 30 }] }, 'CALL');
+spot('76s on BTN vs CO open, 35bb (too short to pay off)', { hero: h('7s6s'), position: 'BTN', pot: 45, toCall: 30, heroStack: 350, actions: raiseBy('V', 30), villains: [{ name: 'V', position: 'CO', stack: 350, bet: 30 }] }, 'FOLD');
 spot('J4o vs an open', { hero: h('Jd4c'), position: 'HJ', pot: 45, toCall: 30, actions: raiseBy('V', 30) }, 'FOLD');
 spot('KK facing a 3-bet', { hero: h('KsKd'), position: 'CO', pot: 140, toCall: 60, heroBet: 30, actions: [...raiseBy('Hero', 30), { type: 'raise', actor: 'V', amount: 60, to: 90 }] }, ['RAISE', 'ALL-IN'], 'VALUE');
 spot('A9o facing a 3-bet', { hero: h('Ad9c'), position: 'CO', pot: 140, toCall: 60, heroBet: 30, actions: [...raiseBy('Hero', 30), { type: 'raise', actor: 'V', amount: 60, to: 90 }] }, 'FOLD');

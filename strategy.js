@@ -21,7 +21,7 @@
   // ─────────────────────────── Tunable model ───────────────────────────
   const MODEL = {
     // How often a typical casual player folds to a bet of size f (bet / pot). Casual players call too much.
-    fold: { base: 0.26, slope: 0.30, max: 0.78, riverBonus: 0.06, vsRaiseBonus: 0.06, multiwayPenalty: 0.0 },
+    fold: { base: 0.26, slope: 0.15, max: 0.78, riverBonus: 0.06, vsRaiseBonus: 0.06, multiwayPenalty: 0.0 },
     // Share of your equity you actually realise before showdown (position + future streets).
     realise: { ip: 0.95, oop: 0.85, river: 1.0 },
     // Hand-aware realisation (6 Nov): out of position you act first every street, so opponents bet you
@@ -41,6 +41,13 @@
     // Opening ranges by table size (players dealt in): heads-up the button opens most hands, and
     // the first seat at a full 9-handed table plays tighter than a generic early seat.
     rfiBySize: { on: true, headsUp: 0.80, utg9: 0.10, utg8: 0.115 },
+    // Exploits (6 Nov). elastic: how much more a player folds as the bet grows depends on who they
+    // are: callers barely change (so value bets go bigger), tight players fold much more to big bets.
+    // overbets: extra bet sizes above the pot.
+    exploit: { elastic: false, slopeBase: 0.05, slopeF2b: 0.5, overbets: [] },
+    // Stack depth preflop: short (≤ shortBB) drops speculative calls/limps that need deep stacks to
+    // pay off; deep (≥ deepBB) adds more of them in position.
+    depth: { on: true, shortBB: 40, deepBB: 150, deepFlat: '22-66,A2s-A9s,K9s,Q9s,J9s,T8s,97s,86s,75s,64s,54s' },
     betSizes: [0.33, 0.5, 0.75, 1.0],
     raiseMultipliers: [2.5, 3.5],
     equityIters: 3000,
@@ -135,7 +142,9 @@
       const k = v.aggression != null ? clamp(0.45 + 0.2 * v.aggression, 0.5, 1.15) : 1;
       return clamp(p * k, 0, MODEL.fold.max);
     }
-    return foldProb(f, { street, vsRaise: facing, override: v.foldOverride != null ? clamp(v.foldOverride + 0.25 * (f - 0.5), 0, 0.95) : null });
+    const X = MODEL.exploit;
+    const slope = X.elastic && v.foldOverride != null ? X.slopeBase + X.slopeF2b * v.foldOverride : 0.25;
+    return foldProb(f, { street, vsRaise: facing, override: v.foldOverride != null ? clamp(v.foldOverride + slope * (f - 0.5), 0, 0.95) : null });
   }
 
   function foldProb(f, { street, vsRaise, model = MODEL.fold, override } = {}) {
@@ -216,7 +225,8 @@
         return out('RAISE', raiseTo(pf.limpers ? 3 + pf.limpers : size), 'VALUE',
           pf.limpers ? `${hc} is a raise over ${pf.limpers} limper${pf.limpers > 1 ? 's' : ''} from ${pos}` : `${hc} is in the ${pos} opening range — open`);
       }
-      if (pf.limpers > 0 && has(hero, RANGES.overLimp) && ctx.toCall <= bb)
+      const D = MODEL.depth, shortStack = D.on && effBB <= D.shortBB;
+      if (pf.limpers > 0 && has(hero, RANGES.overLimp) && ctx.toCall <= bb && !(shortStack && !/^(\w)\1$/.test(hc) && !hc.startsWith('A')))
         return out('CALL', ctx.toCall, 'CHART', `Limp behind: ${hc} plays well multiway for a cheap price (sets/straights/flushes)`);
       if (ctx.toCall === 0) return out('CHECK', 0, 'CHART', 'Check');
       return out('FOLD', 0, 'CHART', `${hc} isn't in the ${pos} opening range — fold`);
@@ -235,6 +245,11 @@
       if (bluff) return out('RAISE', threeBetTo, 'BLUFF', `3-bet bluff: ${hc} blocks big aces and plays OK if called`);
       const price = ctx.toCall;
       const setMine = /^(\w)\1$/.test(hc) && price <= 0.07 * eff; // pocket pairs need ~15:1 implied odds
+      const D = MODEL.depth;
+      if (D.on && ip && effBB >= D.deepBB && has(hero, D.deepFlat) && price <= 0.05 * eff)
+        return out('CALL', price, 'CHART', `Deep stacks: ${hc} can win a big pot when it hits, and you have position`);
+      if (D.on && effBB <= D.shortBB && /^[2-9T][2-9]s$/.test(hc)) // small suited connectors / gappers
+        return out('FOLD', 0, 'CHART', `${effBB.toFixed(0)}bb is too short for ${hc} to pay off when it hits — fold`);
       // From the small blind, flatting a raise is the worst spot at the table (out of position, with
       // the big blind still to act): 3-bet or fold, except pocket pairs at a good set-mining price.
       const flatOk = (pos !== 'SB' || setMine) && (has(hero, RANGES.flat) || (pos === 'BTN' && has(hero, RANGES.flatBtnExtra)));
@@ -318,7 +333,7 @@
     // Bets / raises
     const sizes = [];
     if (!facing) {
-      for (const f of MODEL.betSizes) sizes.push({ kind: 'BET', add: roundTo(f * pot, step), label: labelSize(f) });
+      for (const f of [...MODEL.betSizes, ...(MODEL.exploit.overbets || [])]) sizes.push({ kind: 'BET', add: roundTo(f * pot, step), label: labelSize(f) });
     } else {
       for (const m of MODEL.raiseMultipliers) sizes.push({ kind: 'RAISE', to: roundTo(m * maxBet, step), label: `${m}x` });
     }

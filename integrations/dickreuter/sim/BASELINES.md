@@ -8,6 +8,8 @@ same seed (the decks are identical, so compare deck by deck).
 python run_sim.py --hands 800 --seats N --lineup humans --seed 21 --physical-seats 9 --no-learn
 ```
 
+Try a setting without editing code: `POKER_COACH_MODEL='{"exploit":{"elastic":true}}' python run_sim.py ...`
+
 Cash game, 100bb, stacks topped up every hand. Every deck is played once from every seat. With
 `--physical-seats 9` the coach sees a 9-seat table where the spare seats are empty or sitting out
 with chips, which tests the dealt-in / position logic as well.
@@ -31,6 +33,27 @@ with chips, which tests the dealt-in / position logic as well.
 | Both together | 6-handed | −22.3 ± 27.5 | off |
 | Heads-up button opens 80% (was the 47% 6-max button range) | heads-up | **+17.8 ± 13.1** | on |
 | 9-handed UTG opens 10% (was 13%) | 9-handed | −3.2 ± 43.3 (no change) | on |
+
+| Each player's fold rate rises with bet size by their own fold-to-bet (callers barely change) | 6-handed, learning on | −23.0 ± 31.2 | off (`exploit.elastic`) |
+| 1.5× pot overbets added | 6-handed, learning on | −25.4 ± 32.4 | off (`exploit.overbets`) |
+| Unknown players fold only a little more to bigger bets (fold slope 0.30 → 0.15) | 6-handed, 100bb | +13.4 ± 23.9 | on |
+| Stack depth preflop (fold small suited connectors to raises ≤ 40bb; call more of them in position ≥ 150bb) | 6-handed, 40bb / 200bb | +5.9 ± 11.5 / +24.4 ± 40.3 | on |
+| Both together | 6-handed 100bb / heads-up / 9-handed | +0.5 ± 24.6 / +8.7 ± 17.5 / +4.3 ± 39.7 | on |
+
+### Stack depth (6-handed, same table, 4,800 hands each)
+
+| Everyone's stack | Coach bb/100 |
+|---|---|
+| 40bb | +33 ± 17 |
+| 100bb | +66 ± 34 |
+| 200bb | +116 ± 53 |
+
+Deeper is better against weaker players (more room for their mistakes), with bigger swings.
+
+**The noise floor:** about ±20 bb/100 even at 15,000 hands, because two versions stop playing
+identical hands after their first different decision. Changes smaller than that can't be proven
+here. The two kept changes never lost at any table size and match standard poker theory, so they
+stay on; they aren't proven gains.
 
 The out-of-position ideas lost against humans: casual players don't c-bet reliably, so checking to
 them gives free cards. They lost money against dickreuter's own bot too before, for other reasons.
