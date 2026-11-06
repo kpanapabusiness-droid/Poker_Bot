@@ -242,6 +242,8 @@ def main(repo):
         new = re.sub(r'(?m)^db\s*=.*$', f'db = {LOCAL_DB}', src)
         # its remembered strategy ("Trial 1") lived on dickreuter's server; start on the local Default
         new = re.sub(r'(?m)^last_strategy\s*=\s*Trial 1\s*$', 'last_strategy = Default', new)
+        # the shipped config names a VirtualBox VM ("w1064"); read this PC's own screen instead
+        new = re.sub(r'(?m)^control\s*=.*$', 'control = Direct mouse control', new)
         if new != src:
             if not os.path.exists(path + '.orig'):
                 shutil.copy(path, path + '.orig')
