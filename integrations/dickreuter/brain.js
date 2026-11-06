@@ -65,18 +65,42 @@
     }
   }
 
+  /**
+   * Condition a villain's range on each of their postflop actions (weighted: every holding's weight
+   * × how likely this player is to act this way with it). Their tracked tendencies move the
+   * thresholds: aggressive players bet a wider range, players who rarely fold call wider, and both
+   * bluff/float more or less. Steps are recorded in `history` for diagnostics; an action that would
+   * leave nothing is skipped with a warning, never replaced by random hands.
+   */
   function applyPostflop(villain, actions, board, est) {
-    const opts = { bluffKeep: clamp(0.06 + 0.07 * est.af, 0.06, 0.45), floatKeep: clamp(0.75 - est.f2b, 0.1, 0.6) };
+    const af = est.af != null ? est.af : 1, f2b = est.f2b != null ? est.f2b : 0.4;
+    const opts = {
+      bluffKeep: clamp(0.06 + 0.07 * af, 0.06, 0.45), floatKeep: clamp(0.75 - f2b, 0.1, 0.6) * 0.6,
+      valueShift: clamp(-0.05 * (af - 1), -0.12, 0.08), callShift: clamp((f2b - 0.40) * 0.6, -0.15, 0.15),
+    };
     const LEN = { flop: 3, turn: 4, river: 5 };
+    const base = { flop: [0.55, 0.35], turn: [0.60, 0.40], river: [0.65, 0.45] };
     let street = 'preflop', combos = villain.combos || E.allCombos(), narrowed = false;
+    const history = [{ step: 'preflop', label: villain.label, combos: E.rangeSize(villain.combos) }];
+    const warnings = [];
     for (const a of actions) {
       if (a.type === 'street') { street = a.street; continue; }
-      if (street === 'preflop' || a.actor !== villain.name || !['bet', 'raise', 'allin', 'call'].includes(a.type)) continue;
+      if (street === 'preflop' || a.actor !== villain.name || !['bet', 'raise', 'allin', 'call', 'check'].includes(a.type)) continue;
       const b = board.slice(0, LEN[street]);
       if (b.length < LEN[street]) continue;
-      combos = E.narrowRange(combos, b, a.type, opts); narrowed = true;
+      const [v0, c0] = base[street];
+      try {
+        combos = E.weightRange(combos, b, a.type, { ...opts, valueThr: v0 + opts.valueShift, callThr: c0 + opts.callShift });
+        narrowed = true;
+        history.push({ step: `${street} ${a.type}`, combos: Math.round(E.rangeSize(combos)) });
+      } catch (e) {
+        warnings.push(`${villain.name}: no holding fits "${a.type}" on the ${street} — kept the range from before it`);
+      }
     }
-    return narrowed ? { ...villain, combos } : villain;
+    const out = narrowed ? { ...villain, combos } : { ...villain };
+    out.rangeHistory = history;
+    if (warnings.length) out.warnings = warnings;
+    return out;
   }
 
   // ── Positions and action order ──
@@ -207,10 +231,37 @@
     return h >>> 0;
   }
 
-  function decideFromTable(t, estimateFor, opts = {}) {
+  /**
+   * What an average opponent would think WE hold, from our actions this hand: our preflop role
+   * (open, 3-bet, call, limp, big blind check) narrowed by each of our postflop actions with the same
+   * weighted update used for opponents. The strategy narrows it once more for the bet it's considering.
+   */
+  function heroPerceived(t, actions, role) {
+    const pos = positionOf(0, t);
+    let r;
+    switch (role.Hero) {
+      case 'raise': r = E.topRange(clamp(0.22 * (POS_WIDTH[pos] || 1), 0.08, 0.5)); break;
+      case '3bet+': r = E.topRange(0.08); break;
+      case 'call': r = without(E.topRange(0.35), E.topRange(0.04)); break;
+      case 'limp': r = without(E.topRange(0.55), E.topRange(0.08)); break;
+      default: r = E.allCombos();  // big blind check, or no action seen
+    }
+    const LEN = { flop: 3, turn: 4, river: 5 };
+    const board = E.parseCards(t.board || []);
+    let street = 'preflop';
+    for (const a of actions) {
+      if (a.type === 'street') { street = a.street; continue; }
+      if (street === 'preflop' || a.actor !== 'Hero' || !['bet', 'raise', 'allin', 'call', 'check'].includes(a.type)) continue;
+      const b = board.slice(0, LEN[street]);
+      if (b.length < LEN[street]) continue;
+      try { r = E.weightRange(r, b, a.type); } catch (e) { /* keep the range from before that action */ }
+    }
+    return r;
+  }
+
+  /** Each live opponent's range from their actions this hand (preflop role, then every postflop action). */
+  function buildVillains(t, estimateFor) {
     const name = seat => nameOf(t, seat);
-    if (!t || !t.heroCards || t.heroCards.length !== 2) throw new Error('need two hero cards');
-    if (SPOT_SEED && E.setSeed) E.setSeed(seedFor(t));
     const board = t.board || [];
     const actions = synthActions(t);
     const role = preflopRole(actions);
@@ -221,8 +272,17 @@
       const pos = positionOf(p.seat, t);
       const r = villainRange(role[name(p.seat)], pos, est);
       return applyPostflop({ name: name(p.seat), position: pos, stack: p.stack, bet: p.bet || 0, foldOverride: est.f2b, aggression: est.af,
-        type: est.type ? est.type.short : '?', hands: est.hands || 0, ...r }, actions, E.parseCards(board), est);
+        type: est.type ? est.type.short : '?', hands: est.hands || 0, est, preflopRole: role[name(p.seat)] || 'none', ...r }, actions, E.parseCards(board), est);
     });
+    return { actions, role, live, villains };
+  }
+
+  function decideFromTable(t, estimateFor, opts = {}) {
+    const name = seat => nameOf(t, seat);
+    if (!t || !t.heroCards || t.heroCards.length !== 2) throw new Error('need two hero cards');
+    if (SPOT_SEED && E.setSeed) E.setSeed(seedFor(t));
+    const board = t.board || [];
+    const { actions, role, live, villains } = buildVillains(t, estimateFor);
     const order = actingOrder([0, ...live.map(p => p.seat)], t, 'flop');
     const ctx = {
       hero: E.parseCards(t.heroCards), board: E.parseCards(board), pot: t.pot, toCall: t.toCall || 0,
@@ -230,13 +290,17 @@
       inPosition: order[order.length - 1] === 0, heroName: 'Hero', actions, villains,
       // game context: how many were dealt in, and where we sit relative to the button
       tableSize: tableSize(t), seatsFromButton: seatsFromButton(0, t), format: t.format || 'cash',
+      heroRange: board.length >= 3 ? heroPerceived(t, actions, role) : null,
     };
     let d = S.decide(ctx);
     const solved = (opts.solver !== false) ? riverSolve(t, ctx, actions, role, villains, opts, d) : null;
     if (solved) d = solved;
+    const warnings = [...(d.warnings || []), ...villains.flatMap(v => v.warnings || [])];
     return { ...d, text: S.describe(d), position: ctx.position, inPosition: ctx.inPosition,
+      ...(warnings.length ? { warnings } : {}),
+      perceivedCombos: ctx.heroRange ? Math.round(E.rangeSize(ctx.heroRange)) : null,
       ranges: villains.map(v => ({ name: v.name, position: v.position, label: v.label, type: v.type, hands: v.hands,
-        combos: v.combos ? v.combos.length : 1326 })) };
+        combos: Math.round(E.rangeSize(v.combos)), steps: v.rangeHistory })) };
   }
 
   // ── River solver (heads-up) ──
@@ -349,7 +413,7 @@
     return prev[n];
   }
 
-  module.exports = { decideFromTable, createBrain, handToLog, synthActions, actingOrder, positionOf, nameOf };
+  module.exports = { decideFromTable, createBrain, handToLog, synthActions, actingOrder, positionOf, nameOf, buildVillains, applyPostflop, villainRange, heroPerceived, PRIOR };
 
   // ── stdin/stdout server for coach_decision.py ──
   if (require.main === module && process.argv.includes('--serve')) {

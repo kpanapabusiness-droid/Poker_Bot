@@ -383,3 +383,19 @@ def seat_status(img, name_box):
     if width == 0:
         return 'empty'
     return 'away' if width >= 50 else 'folded'
+
+
+def read_bet(img, box, pad=22):
+    """A bet in front of a player. Long amounts ("$1,875,000") can run past a box mapped when bets
+    were short, and the reader then sees "$1,875,00" (187,500). Read the box and a wider one; take the
+    wider read only when it extends the narrow one's digits (the wider box can also catch chips or
+    the table rim and read nothing, so it never replaces a read outright)."""
+    x1, y1, x2, y2 = [int(v) for v in box]
+    base = read_amount(img, (x1, y1, x2, y2))
+    wide = read_amount(img, (max(0, x1 - pad), y1, x2 + pad, y2))
+    if wide is None:
+        return base
+    if base is None:
+        return wide
+    b, w = str(int(base)), str(int(wide))
+    return wide if len(w) > len(b) and w.startswith(b) else base

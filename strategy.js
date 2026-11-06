@@ -56,6 +56,13 @@
     // fold estimate is the least reliable number here, so don't bluff away a hand that can win at showdown
     // on a thin edge.
     bluffMargin: 0.10,
+    // How villains respond to our bets/raises (rangeFolds on): each holding continues with probability
+    // rising around an absolute strength threshold that goes up with the price (need = their call /
+    // the pot after calling) and when they're facing a raise. off = the older population fold curve.
+    rangeFolds: true,
+    response: { base: { flop: 0.50, turn: 0.58, river: 0.64 }, priceSlope: 0.6, vsRaise: 0.06, f2bShift: 1.0, width: 0.04, drawCall: 0.9,
+                // perceived-range model: continue when equity vs what our bet represents > price + callBias + stickiness × (f2b − 0.4)
+                callBias: 0.0, stickiness: 0.8, eqWidth: 0.06, perceivedWeight: 0.5 },
     // Stack depth preflop: short (≤ shortBB) drops speculative calls/limps that need deep stacks to
     // pay off; deep (≥ deepBB) adds more of them in position.
     depth: { on: true, shortBB: 40, deepBB: 150, deepFlat: '22-66,A2s-A9s,K9s,Q9s,J9s,T8s,97s,86s,75s,64s,54s' },
@@ -175,28 +182,92 @@
     const deadSet = new Set(dead);
     const b = board, cat = 1048576;
     return combos
-      .filter(([x, y]) => !deadSet.has(x) && !deadSet.has(y))
+      .filter(([x, y, w]) => !deadSet.has(x) && !deadSet.has(y) && (w == null || w > 0))
       .map(c => {
-        let s = E.evaluate([...c, ...b]);
+        const h = [c[0], c[1]];  // weighted ranges carry the weight as a third item: never feed it to the evaluator
+        let s = E.evaluate([...h, ...b]);
         if (b.length < 5) {
-          const f = E.handFeatures(c, b);
+          const f = E.handFeatures(h, b);
           if (f.flushDraw) s += 1.3 * cat;
           if (f.straightDraw) s += 0.8 * cat;
         }
-        return { c, s };
+        return { c, s, w: c.length > 2 ? c[2] : 1, draw: b.length < 5 && E.handFeatures(h, b).draw };
       })
       .sort((p, q) => q.s - p.s);
   }
 
   /** The part of a range that continues when it folds `fold` of the time: the strongest (1 - fold). */
+  /** The strongest part of a range that carries (1 − fold) of its weight: who continues vs our bet. */
   function continuing(table, fold) {
-    const n = Math.max(1, Math.ceil(table.length * (1 - fold)));
-    return table.slice(0, n).map(t => t.c);
+    const total = table.reduce((t, e) => t + e.w, 0);
+    const want = Math.max(1e-9, total * (1 - fold));
+    const out = [];
+    let got = 0;
+    for (const e of table) {
+      if (got >= want) break;
+      const take = Math.min(e.w, want - got);  // the last holding may count only partly
+      out.push(e.c.length > 2 || take !== 1 ? [e.c[0], e.c[1], take] : e.c);
+      got += take;
+    }
+    return out.length ? out : [table[0].c];
   }
 
+  // Problems met while deciding (empty ranges, unreliable samples). Reset per decision and returned
+  // with it, so a fallback is always visible in the log, never silent.
+  let WARN = [];
   function heroEquity(hero, board, villainRanges, iters) {
-    try { return E.equity({ hero, board, villains: villainRanges, iterations: iters }).equity; }
-    catch (e) { return E.equity({ hero, board, villains: villainRanges.map(() => null), iterations: iters }).equity; }
+    try {
+      const r = E.equity({ hero, board, villains: villainRanges, iterations: iters });
+      if (r.warning && !WARN.includes(r.warning)) WARN.push(r.warning);
+      return r.equity;
+    } catch (e) {
+      // Only per villain whose range is impossible: that one is treated as any two cards, and it's flagged.
+      const fixed = villainRanges.map(r => {
+        if (!r) return r;
+        const ok = r.filter(([a, b, w]) => !hero.includes(a) && !hero.includes(b) && !board.includes(a) && !board.includes(b) && (w == null || w > 0));
+        return ok.length ? ok : null;
+      });
+      const msg = `equity fallback: ${e.message}; ${fixed.filter(x => !x).length} range(s) treated as any two cards`;
+      if (!WARN.includes(msg)) WARN.push(msg);
+      return E.equity({ hero, board, villains: fixed, iterations: iters }).equity;
+    }
+  }
+
+  /**
+   * Who continues against our bet/raise, from each villain's own (weighted) range: a holding calls if
+   * it is strong enough on this board for the price (absolute strength, since players call with
+   * "I have trips", not with "the top half of my range"). Draws continue before the river at a rate
+   * that falls with the price. Their tracked fold-to-bet moves the threshold.
+   * Returns { fold, cont } where cont is the continuing range with weights.
+   */
+  function rangeResponse(table, absHS, street, need, facingRaise, f2b, perceived, board) {
+    const R = MODEL.response;
+    if (perceived && perceived.length && R.perceivedWeight > 0) {
+      // Casual players mostly look at their own hand; better players weigh what our line represents.
+      // perceivedWeight blends the two (0 = own hand only, 1 = our range only).
+      const pr = perceivedResponse(table, street, need, facingRaise ? null : f2b, perceived, board);
+      const k = R.perceivedWeight;
+      if (k >= 1) return pr;
+      const own = rangeResponse(table, absHS, street, need, facingRaise, f2b, null, board);
+      const m = new Map(own.cont.map(c => [c[0] * 52 + c[1], c[2]]));
+      const cont = pr.cont.map(c => [c[0], c[1], (1 - k) * (m.get(c[0] * 52 + c[1]) || 0) + k * c[2]]);
+      for (const c of own.cont) if (!pr.cont.some(x => x[0] === c[0] && x[1] === c[1])) cont.push([c[0], c[1], (1 - k) * c[2]]);
+      return { fold: (1 - k) * own.fold + k * pr.fold, cont: cont.filter(c => c[2] > 1e-6) };
+    }
+    // fold-to-bet is measured when they face a bet; it says nothing about facing a raise after they bet
+    const sticky = facingRaise ? 0 : R.f2bShift * ((f2b ?? 0.4) - 0.4);
+    const thr = R.base[street] + R.priceSlope * (need - 0.25) + (facingRaise ? R.vsRaise : 0) + sticky;
+    const drawCall = clamp(R.drawCall - 1.5 * (need - 0.2), 0.15, 0.95);
+    let tw = 0, cw = 0;
+    const cont = [];
+    for (const e of table) {
+      const k = e.c[0] < e.c[1] ? e.c[0] * 52 + e.c[1] : e.c[1] * 52 + e.c[0];
+      let p = 1 / (1 + Math.exp(-((absHS.get(k) ?? 0.5) - thr) / R.width));
+      if (street !== 'river' && e.draw) p = Math.max(p, drawCall);
+      tw += e.w; cw += e.w * p;
+      if (e.w * p > 1e-6) cont.push([e.c[0], e.c[1], e.w * p]);
+    }
+    return { fold: tw > 0 ? 1 - cw / tw : 1, cont };
   }
 
   // ─────────────────────────── Preflop ───────────────────────────
@@ -313,6 +384,90 @@
     return opp ? Math.min(heroTotal, opp) : heroTotal;
   }
 
+  /**
+   * The better model, used when we know what our line represents: each of their holdings continues
+   * when its showdown equity against our perceived range (after this bet) beats the price they're
+   * getting, shifted by how sticky this player is (tracked fold-to-bet). Card removal is exact: our
+   * perceived holdings that share a card with theirs don't count (blockers). Before the river, draws
+   * continue at a rate that falls with the price.
+   */
+  function perceivedResponse(table, street, need, f2b, perceived, board) {
+    const R = MODEL.response;
+    const ours = perceived.map(c => ({ a: c[0], b: c[1], w: c.length > 2 ? c[2] : 1, s: E.evaluate([c[0], c[1], ...board]) }))
+      .filter(o => !board.includes(o.a) && !board.includes(o.b));
+    const thr = need + R.callBias + R.stickiness * ((f2b ?? 0.4) - 0.4);
+    const drawCall = clamp(R.drawCall - 1.5 * (need - 0.2), 0.15, 0.95);
+    let tw = 0, cw = 0;
+    const cont = [];
+    for (const e of table) {
+      const [x, y] = e.c, sv = E.evaluate([x, y, ...board]);
+      let win = 0, tot = 0;
+      for (const o of ours) {
+        if (o.a === x || o.a === y || o.b === x || o.b === y) continue;  // blockers
+        tot += o.w;
+        if (sv > o.s) win += o.w; else if (sv === o.s) win += o.w / 2;
+      }
+      const eq = tot ? win / tot : 0.5;
+      let p = 1 / (1 + Math.exp(-(eq - thr) / R.eqWidth));
+      if (street !== 'river' && e.draw) p = Math.max(p, drawCall);
+      tw += e.w; cw += e.w * p;
+      if (e.w * p > 1e-6) cont.push([x, y, e.w * p]);
+    }
+    return { fold: tw > 0 ? 1 - cw / tw : 1, cont };
+  }
+
+  /**
+   * EV of betting/raising to `totalTo` (we add `add`). Each villain folds or continues from their own
+   * range (rangeResponse); every combination of callers is weighed by its probability (exact for up to
+   * 4 villains, sampled beyond), with equity against exactly those callers' continuing ranges and the
+   * pot those callers can actually build: a caller adds at most their stack, and we only risk what the
+   * deepest caller can match (the rest comes back). Side pots between callers are not split (approximation).
+   */
+  function evalAggression({ villains, tables, absHS, hero, board, pot, add, totalTo, street, real, heroBet, heroRange, isRaise }) {
+    const n = villains.length;
+    // what this bet says about us: our perceived range, narrowed by this action
+    let perceived = null;
+    if (heroRange) { try { perceived = E.weightRange(heroRange, board, isRaise ? 'raise' : 'bet', { dead: hero }); } catch (e) { perceived = null; } }
+    const resp = villains.map((v, i) => {
+      const callAmt = Math.max(0, Math.min(totalTo - (v.bet || 0), v.stack != null ? v.stack : Infinity));
+      const need = callAmt / (pot + add + callAmt);
+      return { callAmt, ...rangeResponse(tables[i], absHS, street, need, (v.bet || 0) > 0, v.foldOverride, perceived, board) };
+    });
+    // MDF bound: nobody folds far more than the price justifies to a small bet
+    if (MODEL.mdfCap > 0) resp.forEach(r => { const cap = MODEL.mdfCap * r.callAmt / (pot + add); if (r.fold > cap) r.fold = cap; });
+    const folds = resp.map(r => r.fold);
+    const allFold = folds.reduce((p, x) => p * x, 1);
+    const subsets = [];
+    if (n <= 4) {
+      for (let m = 1; m < 1 << n; m++) {
+        let p = 1; const who = [];
+        for (let i = 0; i < n; i++) { if (m & (1 << i)) { p *= 1 - folds[i]; who.push(i); } else p *= folds[i]; }
+        if (p > 1e-4) subsets.push({ who, p });
+      }
+    } else {  // many villains: sample caller combinations (seeded through the engine's random source)
+      const seen = new Map();
+      for (let k = 0; k < 24; k++) {
+        const who = []; for (let i = 0; i < n; i++) if (Math.random() >= folds[i]) who.push(i);
+        if (!who.length) continue;
+        const key = who.join(','); seen.set(key, (seen.get(key) || 0) + 1);
+      }
+      const tot = [...seen.values()].reduce((a, b) => a + b, 0);
+      for (const [key, c] of seen) subsets.push({ who: key.split(',').map(Number), p: (1 - allFold) * c / tot });
+    }
+    let ev = allFold * pot, eqSum = 0, pSum = 0;
+    const cases = [];
+    for (const { who, p } of subsets) {
+      const eq = heroEquity(hero, board, who.map(i => resp[i].cont), who.length > 1 ? 2000 : MODEL.equityIters);
+      const matched = Math.max(...who.map(i => (villains[i].bet || 0) + resp[i].callAmt));
+      const ourAdd = Math.min(add, Math.max(0, matched - heroBet));
+      const finalPot = pot + ourAdd + who.reduce((t, i) => t + resp[i].callAmt, 0);
+      ev += p * (eq * (street === 'river' ? 1 : real) * finalPot - ourAdd);
+      eqSum += p * eq; pSum += p;
+      if (cases.length < 6) cases.push({ callers: who.map(i => villains[i].name), p: +p.toFixed(3), eq: +eq.toFixed(3) });
+    }
+    return { ev, eqC: pSum ? eqSum / pSum : null, allFold, folds, cases };
+  }
+
   // ─────────────────────────── Postflop ───────────────────────────
   /**
    * ctx: { hero, board, pot, toCall, heroStack, heroBet, bb, position, street,
@@ -354,12 +509,21 @@
     }
     if (eff <= 3 * pot || heroAll <= 1.2 * pot) sizes.push({ kind: 'ALL-IN', add: heroAll, label: 'all-in' });
 
+    const absHS = MODEL.rangeFolds ? E.strengthPercentiles(board) : null;
     for (const s of sizes) {
       let add = s.kind === 'RAISE' ? s.to - ctx.heroBet : s.add;
       if (add >= heroAll) add = heroAll;
       if (add <= ctx.toCall) continue; // not a real raise
       const isAllIn = add >= heroAll;
       const totalTo = ctx.heroBet + add;
+      if (MODEL.rangeFolds) {
+        const o = evalAggression({ villains, tables, absHS, hero, board, pot, add, totalTo, street, real, heroBet: ctx.heroBet || 0,
+          heroRange: ctx.heroRange, isRaise: facing });
+        // a raise/all-in nobody can call more than part of is still that action; the EV uses what they can match
+        options.push({ action: isAllIn ? 'ALL-IN' : s.kind === 'BET' ? 'BET' : 'RAISE', amount: totalTo, add, sizeLabel: isAllIn ? 'all-in' : s.label,
+          ev: o.ev, eqC: o.eqC, foldEst: o.allFold, foldNeeded: add / (pot + add), folds: o.folds, callerCases: o.cases });
+        continue;
+      }
       const villainCall = Math.max(0, totalTo - maxBet); // what the bettor (or a checker) must add to continue
       const f = villainCall / (pot + add);
       const folds = villains.map(v => villainFold(v, f, street, facing));
@@ -423,7 +587,9 @@
       street, action: best.action, amount: best.action === 'CALL' || best.action === 'FOLD' || best.action === 'CHECK' ? best.amount : best.amount,
       add: best.add, sizeLabel: best.sizeLabel, tag, reason, equity: eq, eqWhenCalled: best.eqC, foldEst: best.foldEst,
       foldNeeded: best.foldNeeded, ev: best.ev, handName: heroMade, features: feat,
-      options: options.map(o => ({ action: o.action, amount: o.amount, sizeLabel: o.sizeLabel, ev: o.ev })),
+      options: options.map(o => ({ action: o.action, amount: o.amount, sizeLabel: o.sizeLabel, ev: o.ev,
+        ...(o.eqC != null ? { eqWhenCalled: o.eqC } : {}), ...(o.foldEst != null ? { foldEst: o.foldEst, foldNeeded: o.foldNeeded } : {}),
+        ...(o.callerCases ? { callerCases: o.callerCases } : {}), ...(o.eq != null ? { equity: o.eq } : {}) })),
     };
   }
 
@@ -431,7 +597,10 @@
 
   /** One entry point: picks preflop or postflop logic. */
   function decide(ctx) {
-    return ctx.board && ctx.board.length >= 3 ? postflop(ctx) : preflop(ctx);
+    WARN = [];
+    const d = ctx.board && ctx.board.length >= 3 ? postflop(ctx) : preflop(ctx);
+    if (WARN.length) d.warnings = [...(d.warnings || []), ...WARN];
+    return d;
   }
 
   /** Short human-readable line, e.g. "RAISE to $60" / "BET $35 (½ pot)". */

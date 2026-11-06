@@ -104,3 +104,44 @@ Two big losses at 25k blinds: Q9 trips shoved over a river lead (−252 bb; call
 
 Neutral in the simulator and both real hands now play right. The simulated humans call raises
 with top pair a lot, which is why tighter calling ranges on earlier streets cost here.
+
+## Range and EV rebuild (6 Nov, late) — stages 1–4 of the intelligence plan
+
+### Root causes of the two Torn losses
+- **Hand 70133909, Q9 shoved over a river lead (−252 bb).** Three faults, found by rebuilding the hand
+  through `brain.buildVillains` with the real action history:
+  1. *Range estimation:* on a paired board the evaluator calls any pair "two pair", and narrowing
+     kept it as "top pair or better", so the opponent's river betting range was full of weak hands
+     (our equity 77%).
+  2. *Raise EV:* the shove counted 7.6M the opponent couldn't call (he had 4.08M behind), inflating
+     the pot when called and the fold estimate.
+  3. *Fold equity:* folds came from one population curve, not from the opponent's own range or from
+     what our line represented.
+- **Hand 421936363, 88 "bluff-raise" (−32 bb).** Not a strategy error: the bet was **read as $187,500
+  instead of $1,875,000**. The bet box was too narrow for 7-digit amounts.
+
+### What changed
+- `poker-engine.js`: `strengthPercentiles` (board-relative strength); `weightRange` (weighted
+  update per action incl. checks, thresholds relative to the player's own range, throws instead of
+  returning random hands); weighted sampling in `equity`, plus a warning when most samples are rejected.
+- `strategy.js`: `evalAggression` — each villain responds from their own range; caller combinations
+  enumerated (exact up to 4 villains, sampled beyond); a caller adds at most their stack and we only
+  risk what they can match. `perceivedResponse` — opponents continue by equity vs what our line
+  represents (blockers exact), blended 50/50 with own-hand strength (`response.perceivedWeight`).
+  Fold-to-bet isn't used for a player facing a raise after betting. Weights never reach the evaluator.
+  Visible warnings instead of silent random-hand fallbacks.
+- `brain.js`: weighted range updates from tracked tendencies, our perceived range
+  (`heroPerceived`), range steps and warnings in each decision.
+- `card_reader.py` `read_bet`, `coach_decision.py` `check_to_call`: wider bet reads, cross-checked
+  against the Call button; corrections and warnings are logged (`warnings` column).
+
+### Old (bf4049a) vs new, same decks (seed 91, physical seats 9)
+| Version | 6-handed | Heads-up | 9-handed |
+|---|---|---|---|
+| Perceived range only | +9.3 ± 20.2 | −11.2 ± 15.0 | −15.2 ± 31.5 |
+| **Blended 50/50 (kept)** | **−1.1 ± 16.4** | **−3.7 ± 11.0** | **+15.8 ± 30.9** |
+
+Neutral against the simulated players while fixing the logic. The simulated humans call by their
+own hand only, so they can't reward range reasoning; real opponents are somewhere in between.
+Found in the line breakdown: **turn bluffs lose in both versions** (≈ −540 to −720 bb per 9,000
+hands), and river bluff-catching calls are down. Next stage (bluff engine) targets both.

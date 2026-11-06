@@ -151,6 +151,14 @@ C._upgrade_log(old)
 up = list(_csv.DictReader(open(old, encoding='utf-8-sig')))
 check('an older log gets the new hero_bet column without losing rows', len(up) == 1 and 'hero_bet' in up[0] and up[0]['game_id'] == 'a', up)
 
+print('\nBet misreads caught by the Call button (Torn, 6 Nov: $1,875,000 read as $187,500)')
+pl = [{'seat': 2, 'bet': 187500.0}]
+tc, warn = C.check_to_call(187500.0, 1900000.0, pl, 0.0)
+check('a dropped digit is restored exactly', tc == 1875000.0 and pl[0]['bet'] == 1875000.0, (tc, pl))
+check('and the correction is reported', bool(warn) and '1,875,000' in warn, warn)
+check('a rounded button ($1.5M) agreeing with the read changes nothing', C.check_to_call(1516711.0, 1500000.0, [{'seat': 5, 'bet': 1516711.0}], 0.0) == (1516711.0, None))
+check('no button read → no change', C.check_to_call(5000.0, None, [], 0.0) == (5000.0, None))
+
 print('\nInstaller')
 dr = os.environ.get('DICKREUTER_DIR', os.path.join(HERE, '..', '..', '..', 'dickreuter', 'poker'))
 if os.path.exists(os.path.join(dr, 'poker', 'main.py')):

@@ -157,9 +157,9 @@ def coach_read(t, game_id, n):
     """Tables marked "coach_reader": read names, stacks, bets and the pot ourselves (greyscale
     OCR that copes with "$1,419,983" and "$2K"), instead of dickreuter's digits-only reader."""
     try:
-        from poker.scraper.card_reader import read_amount, read_text, seat_status  # inside dickreuter (install.py copies it)
+        from poker.scraper.card_reader import read_amount, read_bet, read_text, seat_status  # inside dickreuter (install.py copies it)
     except ImportError:
-        from card_reader import read_amount, read_text, seat_status
+        from card_reader import read_amount, read_bet, read_text, seat_status
     td = t.table_dict
     img = t.screenshot
     live = set(getattr(t, 'players_in_game', None) or [])
@@ -171,7 +171,7 @@ def coach_read(t, game_id, n):
             if v is not None:
                 out['stacks'][seat] = v
         b = _box(td, 'player_pot_area', seat)
-        out['bets'][seat] = (read_amount(img, b) or 0.0) if b else 0.0
+        out['bets'][seat] = (read_bet(img, b) or 0.0) if b else 0.0
         if seat and seat not in live:
             nb = _box(td, 'player_name_area', seat)
             try:
@@ -189,7 +189,34 @@ def coach_read(t, game_id, n):
             out['names'][seat] = _name_cache.get(key, '')
     b = _box(td, 'total_pot_area')
     out['pot'] = read_amount(img, b) if b else None
+    # The Call button's own (rounded) amount, "CALL $1.9M": a second opinion on what we have to call.
+    b = _box(td, 'call_value')
+    try:
+        out['call_btn'] = read_amount(img, (max(0, b[0] - 70), b[1], b[2] + 40, b[3])) if b else None
+    except Exception:
+        out['call_btn'] = None
     return out
+
+
+def check_to_call(to_call, call_btn, players, hero_bet):
+    """Cross-check what we have to call (from the bets in front of players) against the Call button.
+    The button is rounded ("$1.9M"), so small differences are fine; a big one means a bet was misread.
+    Returns (to_call, warning or None). The biggest bet is corrected to the button's amount: exactly,
+    if the misread is a dropped/extra digit (×10, ×100), else the button's rounded value."""
+    if not call_btn or call_btn <= 0 or to_call is None:
+        return to_call, None
+    if abs(to_call - call_btn) <= 0.12 * call_btn:
+        return to_call, None
+    for k in (10, 100, 0.1, 0.01):
+        if abs(to_call * k - call_btn) <= 0.06 * call_btn:
+            fixed = to_call * k
+            break
+    else:
+        fixed = call_btn
+    top = max(players, key=lambda pl: pl['bet'], default=None)
+    if top is not None:
+        top['bet'] = hero_bet + fixed
+    return fixed, f'to call read as {to_call:,.0f} but the Call button says {call_btn:,.0f}: using {fixed:,.0f}'
 
 
 def read_seats(t, game_id, n):
@@ -305,6 +332,7 @@ def table_to_state(t, h=None, p=None):
     else:
         names, stacks = read_seats(t, game, n)
 
+    read_warnings = []
     players = []
     for op in getattr(t, 'other_players', []) or []:
         seat = int(op.get('abs_position', 0)) + 1
@@ -317,6 +345,11 @@ def table_to_state(t, h=None, p=None):
         # what we have to call = the biggest bet in front of anyone, minus ours
         to_call = max([0.0] + [pl['bet'] for pl in players]) - hero_bet
         to_call = max(0.0, min(to_call, stacks.get(0, to_call)))
+        if to_call > 0:
+            to_call, warn = check_to_call(to_call, cr.get('call_btn'), players, hero_bet)
+            if warn:
+                log.warning("Read check: %s", warn)
+                read_warnings.append(warn)
         pot = cr['pot'] if cr['pot'] is not None else hero_bet + sum(pl['bet'] for pl in players)
     else:
         call_value = getattr(t, 'currentCallValue', None)
@@ -339,6 +372,7 @@ def table_to_state(t, h=None, p=None):
         'heroStack': (cr['stacks'].get(0) if cr and cr['stacks'].get(0) is not None else _num(getattr(t, 'myFunds', 0))),
         'heroBet': hero_bet, 'bb': bb, 'nSeats': n, 'dealer': dealer,
         'players': players, 'history': [dict(s) for s in snaps],
+        'readWarnings': read_warnings,
     }
 
 
@@ -415,7 +449,7 @@ def exact_bet(d, state, t=None):
 LOG_DIR = os.environ.get('POKER_COACH_LOG_DIR') or os.path.join(os.path.expanduser('~'), 'poker', 'logs')
 DECISION_FIELDS = ['time', 'game_id', 'street', 'position', 'in_position', 'hero_cards', 'board', 'pot', 'to_call',
                    'hero_stack', 'bb', 'opponents', 'action', 'amount', 'tag', 'equity', 'ev', 'button', 'reason',
-                   'hero_bet']
+                   'hero_bet', 'warnings']
 
 
 def _upgrade_log(path):
@@ -453,6 +487,7 @@ def log_decision(state, d, button, game_id):
             'equity': round(d['equity'], 4) if isinstance(d.get('equity'), (int, float)) else '',
             'ev': best.get('ev', ''), 'button': button, 'reason': d.get('reason'),
             'hero_bet': state.get('heroBet', ''),
+            'warnings': ' | '.join(list(state.get('readWarnings') or []) + list(d.get('warnings') or [])),
         }
         with open(path, 'a', newline='', encoding='utf-8-sig' if not os.path.exists(path) else 'utf-8') as f:
             w = csv.DictWriter(f, fieldnames=DECISION_FIELDS)

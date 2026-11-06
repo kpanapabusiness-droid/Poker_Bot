@@ -31,8 +31,10 @@ spot('76s on BTN vs CO open, 200bb deep (speculative call)', { hero: h('7s6s'), 
 spot('76s on BTN vs CO open, 35bb (too short to pay off)', { hero: h('7s6s'), position: 'BTN', pot: 45, toCall: 30, heroStack: 350, actions: raiseBy('V', 30), villains: [{ name: 'V', position: 'CO', stack: 350, bet: 30 }] }, 'FOLD');
 { // 6 Nov, Torn: trips with a weak kicker vs a river lead from a check-caller → call, don't shove
   const b = E.parseCards('Qc5c6h4dQd');
-  let c = E.topRange(0.5); c = E.narrowRange(c, b.slice(0, 3), 'call'); c = E.narrowRange(c, b.slice(0, 4), 'call'); c = E.narrowRange(c, b, 'bet');
-  spot('Q9 trips vs a river lead after check-calling the turn (call, raising only gets called by better)', { hero: h('Qh9d'), board: b, pot: 3032220, toCall: 1516110, heroStack: 9104445, bb: 25000, position: 'BTN', street: 'river', inPosition: true, villains: [{ name: 'V', position: 'BB', stack: 4076149, bet: 1516110, combos: c }] }, 'CALL');
+  let c = E.topRange(0.5); c = E.weightRange(c, b.slice(0, 3), 'call'); c = E.weightRange(c, b.slice(0, 4), 'call'); c = E.weightRange(c, b, 'bet');
+  // what our line says (button open, bet flop, bet turn), as the brain builds it
+  let ours = E.topRange(0.31); ours = E.weightRange(ours, b.slice(0, 3), 'bet'); ours = E.weightRange(ours, b.slice(0, 4), 'bet');
+  spot('Q9 trips vs a river lead after check-calling the turn (call, raising only gets called by better)', { hero: h('Qh9d'), board: b, pot: 3032220, toCall: 1516110, heroStack: 9104445, bb: 25000, position: 'BTN', street: 'river', inPosition: true, heroRange: ours, villains: [{ name: 'V', position: 'BB', stack: 4076149, bet: 1516110, combos: c }] }, 'CALL');
 }
 spot('J4o vs an open', { hero: h('Jd4c'), position: 'HJ', pot: 45, toCall: 30, actions: raiseBy('V', 30) }, 'FOLD');
 spot('KK facing a 3-bet', { hero: h('KsKd'), position: 'CO', pot: 140, toCall: 60, heroBet: 30, actions: [...raiseBy('Hero', 30), { type: 'raise', actor: 'V', amount: 60, to: 90 }] }, ['RAISE', 'ALL-IN'], 'VALUE');

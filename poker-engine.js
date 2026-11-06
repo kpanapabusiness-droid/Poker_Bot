@@ -257,8 +257,21 @@
       baseUsed[c] = 1;
     });
     // Pre-filter villain ranges against known cards.
-    const vRanges = villains.map(r => r && r.filter(([a, b]) => !baseUsed[a] && !baseUsed[b]));
-    vRanges.forEach((r, i) => { if (r && !r.length) throw new Error('Villain ' + (i + 1) + ' range is empty after removing known cards'); });
+    const vRanges = villains.map(r => r && r.filter(([a, b, w]) => !baseUsed[a] && !baseUsed[b] && (w == null || w > 0)));
+    vRanges.forEach((r, i) => { if (r && !r.length) throw new RangeError('Villain ' + (i + 1) + ' range is empty after removing known cards'); });
+    // Weighted ranges ([c1, c2, w]): sample combos in proportion to their weight.
+    const cum = vRanges.map(r => {
+      if (!r || !r.some(c => c.length > 2 && c[2] !== 1)) return null;
+      const out = new Float64Array(r.length); let t = 0;
+      for (let i = 0; i < r.length; i++) { t += r[i].length > 2 ? r[i][2] : 1; out[i] = t; }
+      return out;
+    });
+    const pick = (r, c) => {
+      if (!c) return r[(rand() * r.length) | 0];
+      const x = rand() * c[c.length - 1]; let lo = 0, hi = c.length - 1;
+      while (lo < hi) { const m = (lo + hi) >> 1; if (c[m] > x) hi = m; else lo = m + 1; }
+      return r[lo];
+    };
 
     const used = new Uint8Array(52);
     const need = 5 - board.length;
@@ -271,11 +284,12 @@
       used.set(baseUsed);
       const vHands = [];
       let ok = true;
-      for (const r of vRanges) {
+      for (let vi = 0; vi < vRanges.length; vi++) {
+        const r = vRanges[vi];
         if (!r) { vHands.push([drawRandom(), drawRandom()]); continue; }
         let tries = 0, h = null;
         while (tries++ < 50) {
-          const cand = r[(rand() * r.length) | 0];
+          const cand = pick(r, cum[vi]);
           if (!used[cand[0]] && !used[cand[1]]) { h = cand; break; }
         }
         if (!h) { ok = false; break; }
@@ -311,8 +325,102 @@
       skipped,
     };
     if (board.length >= 3) res.handName = handName(evaluate([...hero, ...board]));
+    // Most samples rejected: the ranges overlap so much (card removal) that the result is unreliable.
+    if (skipped > iters * 0.5) res.warning = `${skipped} of ${iters} samples rejected (ranges share too many cards)`;
     return res;
   }
+
+  // ───────────────────── Weighted ranges and board-relative strength ─────────────────────
+  /**
+   * How every possible holding ranks on this board right now: Map(a*52+b → percentile 0..1), the
+   * share of other holdings it beats (ties count half). Board-relative, so on Q-Q-6-5-4 a hand like
+   * 6x (which the evaluator calls "two pair") ranks in the middle, not with the strong hands.
+   */
+  const _hsCache = new Map();
+  function strengthPercentiles(board) {
+    const b = parseCards(board);
+    const key = b.join(',');
+    if (_hsCache.has(key)) return _hsCache.get(key);
+    const used = new Set(b);
+    const list = [];
+    for (let x = 0; x < 52; x++) for (let y = x + 1; y < 52; y++) {
+      if (used.has(x) || used.has(y)) continue;
+      list.push([x * 52 + y, evaluate([x, y, ...b])]);
+    }
+    list.sort((p, q) => p[1] - q[1]);
+    const out = new Map();
+    let i = 0;
+    while (i < list.length) {
+      let j = i; while (j < list.length && list[j][1] === list[i][1]) j++;
+      const pct = (i + (j - i) / 2) / list.length; // below + half the ties
+      for (let k = i; k < j; k++) out.set(list[k][0], pct);
+      i = j;
+    }
+    if (_hsCache.size > 64) _hsCache.clear();
+    _hsCache.set(key, out);
+    return out;
+  }
+  const smoothStep = (x, thr, width) => 1 / (1 + Math.exp(-(x - thr) / width));
+
+  /**
+   * Update a range after an action: every holding's weight is multiplied by how likely this player
+   * is to take this action with it. P(action | hand) rises smoothly with the hand's board-relative
+   * strength around a threshold; draws (before the river) and a share of weak hands (bluffs / floats)
+   * keep some weight. opts (from the opponent's tracked tendencies):
+   *   valueThr: strength within their own range above which they bet/raise for value (by street; higher for raises)
+   *   callThr:  strength within their own range above which they call
+   *   bluffKeep / floatKeep: weight kept by weak hands that bet / call anyway
+   *   drawBet / drawCall: weight kept by draws that bet / call
+   *   slowplay: share of strong hands that check
+   * Returns [c1, c2, w] triples with known cards removed. Throws RangeError if nothing is left
+   * (the caller must handle it visibly; it never silently becomes "any two cards").
+   */
+  function weightRange(range, board, action, opts = {}) {
+    const b = parseCards(board);
+    const street = b.length === 3 ? 'flop' : b.length === 4 ? 'turn' : 'river';
+    const used = new Set([...b, ...(opts.dead ? parseCards(opts.dead) : [])]);
+    const hs = strengthPercentiles(b);
+    const raise = /raise|allin/.test(action);
+    // relative to their own range: value-bet the top ~45% / 40% / 35% by street, call with the top ~65% / 60% / 55%
+    const valueThr = (opts.valueThr ?? { flop: 0.55, turn: 0.60, river: 0.65 }[street]) + (raise ? 0.12 : 0);
+    const callThr = opts.callThr ?? { flop: 0.35, turn: 0.40, river: 0.45 }[street];
+    const bluffKeep = (opts.bluffKeep ?? 0.15) * (raise ? 0.5 : 1), floatKeep = opts.floatKeep ?? 0.25;
+    const drawBet = opts.drawBet ?? 0.55, drawCall = opts.drawCall ?? 0.85, slowplay = opts.slowplay ?? 0.25;
+    const W = 0.05; // how gradual the thresholds are (strength units)
+    // Thresholds are measured within THIS player's current range (relative strength), not against
+    // random hands: a player who called twice and then bets the river does it with the strong end
+    // of what they called with.
+    const live = [];
+    for (const c of range) {
+      const [x, y] = c, w0 = c.length > 2 ? c[2] : 1;
+      if (used.has(x) || used.has(y) || !(w0 > 0)) continue;
+      live.push({ c, w0, a: hs.get(comboKey(x, y)) });
+    }
+    live.sort((p, q) => p.a - q.a);
+    const total = live.reduce((t, e) => t + e.w0, 0);
+    let below = 0;
+    for (let i = 0; i < live.length;) {  // equal strength → equal rank
+      let j = i, ww = 0; while (j < live.length && live[j].a === live[i].a) ww += live[j++].w0;
+      for (let k = i; k < j; k++) live[k].rel = (below + ww / 2) / total;
+      below += ww; i = j;
+    }
+    const out = [];
+    for (const { c, w0, rel: h } of live) {
+      const [x, y] = c;
+      const draw = street !== 'river' && handFeatures([x, y], b).draw;
+      let p;
+      if (/bet|raise|allin/.test(action)) p = Math.max(smoothStep(h, valueThr, W), draw ? drawBet * (raise ? 0.6 : 1) : 0, bluffKeep);
+      else if (action === 'call') p = Math.max(smoothStep(h, callThr, W), draw ? drawCall : 0, floatKeep);
+      else if (action === 'check') p = 1 - (1 - slowplay) * Math.max(smoothStep(h, valueThr, W), draw ? drawBet * 0.5 : 0);
+      else p = 1;
+      const w = w0 * p;
+      if (w > 1e-4) out.push([x, y, w]);
+    }
+    if (!out.length) throw new RangeError(`range is empty after "${action}" on ${b.map(cardToString).join('')}`);
+    return out;
+  }
+  /** Effective number of combos in a (weighted) range. */
+  const rangeSize = r => (r ? r.reduce((t, c) => t + (c.length > 2 ? c[2] : 1), 0) : 1326);
 
   // ────────────────────────────── 5. Odds ──────────────────────────────
   /**
@@ -493,7 +601,7 @@
     // ranges
     parseRange, rangePercent, inRange, handClass,
     // equity
-    equity, setSeed,
+    equity, setSeed, strengthPercentiles, weightRange, rangeSize,
     // odds
     potOdds, callEV, mdf, bluffBreakeven, spr, outsToEquity,
     // preflop

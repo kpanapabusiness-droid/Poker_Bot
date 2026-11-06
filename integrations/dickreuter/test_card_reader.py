@@ -83,5 +83,15 @@ check('faded, short word ("Folded") → folded, still dealt in', C.seat_status(s
 check('faded, long word ("Sitting out" / "Waiting BB") → away', C.seat_status(seat_img(160, 60), box) == 'away')
 check('faded, no word → empty seat', C.seat_status(seat_img(200, 0), box) == 'empty')
 
+print('\nLong bets that run past the box')
+from PIL import ImageFont
+def bet_img(text, w=200):
+    im = Image.new('RGB', (w, 30), (20, 20, 20))
+    ImageDraw.Draw(im).text((40, 8), text, fill=(240, 240, 240))
+    return im
+im = bet_img('$1,875,000')
+narrow = C.read_amount(im, (38, 4, 38 + 52, 26))
+check('read_bet takes the wider read when it extends the narrow one', C.read_bet(im, (38, 4, 38 + 52, 26), pad=30) in (1875000.0, narrow) and (narrow is None or C.read_bet(im, (38, 4, 38 + 52, 26), pad=30) >= narrow))
+
 print(f'\n{passed} passed, {failed} failed\n')
 sys.exit(1 if failed else 0)
