@@ -177,24 +177,24 @@ def _save(out, path, rows, detail):
         os.replace(detail + '.tmp', detail)
 
 
-def run(hands, lineup, seed, dr_dir, bb=2.0, stack=200.0, progress=True, learn=True, detail=None, out_path=None):
+def run(hands, lineup, seed, dr_dir, bb=2.0, stack=200.0, progress=True, learn=True, detail=None, out_path=None, seats=6):
     from local_server import DEFAULT_STRATEGY
     dr_dir = prepared_copy(dr_dir)
     strategy = dict(DEFAULT_STRATEGY, bigBlind=bb, smallBlind=bb / 2, initialFunds=stack, initialFunds2=stack)
-    kinds = (lineup * 6)[:6]
+    kinds = (lineup * seats)[:seats]
     tracker_dir = tempfile.mkdtemp() if learn else None
     os.environ.setdefault('POKER_COACH_LOG_DIR', tempfile.mkdtemp())
     agents = [make(k, i, dr_dir, strategy, tracker_dir) for i, k in enumerate(kinds)]
     names = [f'{k}{i}' for i, k in enumerate(kinds)]
     # duplicate: the second table moves everyone one seat, so each seat's cards go to the other bot type
-    seatings = [list(range(6)), [(i - 1) % 6 for i in range(6)]]
+    seatings = [list(range(seats)), [(i - 1) % seats for i in range(seats)]]
     per_pair = {k: [] for k in set(kinds)}
     rows = []
     totals = {k: 0.0 for k in set(kinds)}
     played = 0
     t0 = time.time()
     for h, deck in enumerate(holdem.decks(hands, seed)):
-        button = h % 6
+        button = h % seats
         pair = {k: 0.0 for k in set(kinds)}
         for seating in seatings:
             order = [agents[j] for j in seating]
@@ -205,7 +205,7 @@ def run(hands, lineup, seed, dr_dir, bb=2.0, stack=200.0, progress=True, learn=T
                 totals[kinds[j]] += result[pos] / bb
                 if detail is not None:
                     a = agents[j]
-                    rows.append({'deck': h, 'table': seatings.index(seating), 'bot': kinds[j], 'seat_from_button': (pos - button) % 6,
+                    rows.append({'deck': h, 'table': seatings.index(seating), 'bot': kinds[j], 'seat_from_button': (pos - button) % seats,
                                  'cards': ''.join(rec['hole'][pos]), 'result_bb': round(result[pos] / bb, 2),
                                  'showdown': rec['showdown'], 'actions': ' '.join(getattr(a, 'hand_log', []))})
             played += 1
@@ -239,8 +239,9 @@ def main():
     ap.add_argument('--out')
     ap.add_argument('--no-learn', action='store_true', help="don't let the coach learn opponents during the run")
     ap.add_argument('--detail', help='write one row per player per hand to this CSV')
+    ap.add_argument('--seats', type=int, default=6, help='table size (2-9)')
     o = ap.parse_args()
-    res = run(o.hands, o.lineup.split(','), o.seed, os.path.abspath(o.dickreuter), learn=not o.no_learn, detail=o.detail, out_path=o.out)
+    res = run(o.hands, o.lineup.split(','), o.seed, os.path.abspath(o.dickreuter), learn=not o.no_learn, detail=o.detail, out_path=o.out, seats=o.seats)
     print()
     for k, b in sorted(res['bots'].items(), key=lambda kv: -kv[1]['bb_per_100']):
         print(f"{k:<11} {b['bb_per_100']:+7.1f} bb/100  ± {b['ci95']:.1f}  ({b['decisions']} decisions, {b['errors']} errors, {b['sec_per_decision']}s each)")

@@ -118,7 +118,7 @@ dr = os.environ.get('DICKREUTER_DIR', os.path.join(HERE, '..', '..', '..', 'dick
 if os.path.exists(os.path.join(dr, 'poker', 'main.py')):
     tmp = tempfile.mkdtemp()
     try:
-        for rel in ('poker/main.py', 'poker/tools/strategy_handler.py', 'poker/decisionmaker/decisionmaker.py', 'poker/decisionmaker/curvefitting.py', 'poker/tools/screen_operations.py', 'poker/tools/mouse_mover.py', 'poker/config.ini'):
+        for rel in ('poker/main.py', 'poker/tools/strategy_handler.py', 'poker/decisionmaker/decisionmaker.py', 'poker/decisionmaker/curvefitting.py', 'poker/tools/screen_operations.py', 'poker/tools/mouse_mover.py', 'poker/scraper/table.py', 'poker/scraper/table_screen_based.py', 'poker/config.ini'):
             os.makedirs(os.path.dirname(os.path.join(tmp, rel)), exist_ok=True)
             shutil.copy(os.path.join(dr, rel), os.path.join(tmp, rel))
         for _ in range(2):  # twice: must be idempotent

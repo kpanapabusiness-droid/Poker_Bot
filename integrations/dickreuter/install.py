@@ -118,6 +118,27 @@ def main(repo):
           "        log.debug(f\"Target position: {x1} {y1} {x2} {y2}\")\n",
           "poker-coach: screenshot coordinates -> screen coordinates")
 
+    # Tables bigger than 6 seats: a few of dickreuter's seat calculations were written for 6-max
+    # (hard-coded "% 5", "range(5)", "% 6"). Use the table's real size.
+    tb = os.path.join(pkg, 'scraper', 'table.py')
+    patch(tb,
+          "        for n in range(5):  # n is absolute position of other player, 0 is player after bot\n"
+          "            i = (\n"
+          "                        self.dealer_position + n + 3 - 2) % 5",
+          "        for n in range(self.total_players - 1):  # poker-coach: any table size\n"
+          "            i = (\n"
+          "                        self.dealer_position + n + 3 - 2) % (self.total_players - 1)",
+          "poker-coach: any table size")
+    patch(tb,
+          "        for n in range(first_possible_caller, 5):",
+          "        for n in range(first_possible_caller, self.total_players - 1):  # poker-coach: any table size (callers)",
+          "poker-coach: any table size (callers)")
+    tsb = os.path.join(pkg, 'scraper', 'table_screen_based.py')
+    patch(tsb,
+          "self.big_blind_position_abs_all = (self.dealer_position + 2) % 6",
+          "self.big_blind_position_abs_all = (self.dealer_position + 2) % self.total_players  # poker-coach: any table size",
+          "poker-coach: any table size")
+
     sh = os.path.join(pkg, 'tools', 'strategy_handler.py')
     patch(sh,
           "        if 'collusion' not in self.selected_strategy:\n            self.selected_strategy['collusion'] = 1\n",
