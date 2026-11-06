@@ -187,16 +187,47 @@ def read_cards(img, box, layout='board'):
     region = img.convert('RGB').crop((x1, y1, x2, y2))
     arr = np.array(region)
     out = []
+    notes = []
     for (bx1, by1, bx2, by2) in _faces(arr):
         card = arr[by1:by2, bx1:bx2]
         ink = _ink(card)
         if ink.mean() < 0.02:  # blank white rectangle (not a card face)
+            notes.append(f'blank {bx2 - bx1}x{by2 - by1}')
             continue
         suit = _suit_from_colour(card, ink)
         rank = _rank(region.crop((bx1, by1, bx2, by2)), layout)
+        notes.append(f'face {bx2 - bx1}x{by2 - by1} at {bx1},{by1}: rank={rank} suit={suit}')
         if suit and rank:
             out.append(rank + suit)
+    global last_notes
+    last_notes = notes
     return out
+
+
+last_notes = []  # what read_cards saw on its last call, for the debug log
+_last_dump = [0.0]
+
+
+def dump_failed(img, box, name, folder, every=5.0, keep=30):
+    """Save the search area (and a note of what was found) when cards weren't read, at most every few seconds."""
+    import time, glob, logging
+    now = time.time()
+    if now - _last_dump[0] < every:
+        return
+    _last_dump[0] = now
+    try:
+        os.makedirs(folder, exist_ok=True)
+        x1, y1, x2, y2 = [int(v) for v in box]
+        stamp = time.strftime('%H%M%S')
+        img.convert('RGB').crop((x1, y1, x2, y2)).save(os.path.join(folder, f'{name}_{stamp}.png'))
+        img.convert('RGB').save(os.path.join(folder, f'{name}_{stamp}_table.png'))
+        logging.getLogger(__name__).info(f'card reader {name}: {last_notes or "no white card faces found"} '
+                                         f'(image {img.size}, box {box}) → saved {name}_{stamp}.png')
+        files = sorted(glob.glob(os.path.join(folder, f'{name}_*.png')))
+        for f in files[:-keep]:
+            os.remove(f)
+    except Exception as e:
+        logging.getLogger(__name__).warning(f'card reader debug dump failed: {e}')
 
 
 if __name__ == '__main__':

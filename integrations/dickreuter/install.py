@@ -187,6 +187,18 @@ def main(repo):
 ''',
           'poker-coach: card reader')
     patch(ts,
+          '''            log.info(f"My cards: {self.my_cards}")
+            return
+''',
+          '''            log.info(f"My cards: {self.my_cards}")
+            if len(self.my_cards) != 2:  # poker-coach: keep a picture of what it couldn't read
+                from poker.scraper.card_reader import dump_failed
+                dump_failed(self.screenshot, (a['x1'], a['y1'], a['x2'], a['y2']), 'hand',
+                            get_dir('log') + '/card_debug')
+            return
+''',
+          'poker-coach: keep a picture')
+    patch(ts,
           '''        self.table_cards = []
         for value in CARD_VALUES:''',
           '''        self.table_cards = []
