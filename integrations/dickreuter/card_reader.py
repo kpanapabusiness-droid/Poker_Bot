@@ -96,7 +96,8 @@ def _ocr(img):
 
 def _faces(arr):
     """Bounding boxes of white card faces (connected bright regions of card shape)."""
-    white = (arr[:, :, 0] > 225) & (arr[:, :, 1] > 225) & (arr[:, :, 2] > 225)
+    # live cards are pure white; folded (greyed-out) cards are ~225, so they are ignored
+    white = (arr[:, :, 0] > 240) & (arr[:, :, 1] > 240) & (arr[:, :, 2] > 240)
     h, w = white.shape
     seen = np.zeros_like(white)
     boxes = []
