@@ -449,7 +449,7 @@ def exact_bet(d, state, t=None):
 LOG_DIR = os.environ.get('POKER_COACH_LOG_DIR') or os.path.join(os.path.expanduser('~'), 'poker', 'logs')
 DECISION_FIELDS = ['time', 'game_id', 'street', 'position', 'in_position', 'hero_cards', 'board', 'pot', 'to_call',
                    'hero_stack', 'bb', 'opponents', 'action', 'amount', 'tag', 'equity', 'ev', 'button', 'reason',
-                   'hero_bet', 'warnings']
+                   'hero_bet', 'warnings', 'explain']
 
 
 def _upgrade_log(path):
@@ -488,6 +488,7 @@ def log_decision(state, d, button, game_id):
             'ev': best.get('ev', ''), 'button': button, 'reason': d.get('reason'),
             'hero_bet': state.get('heroBet', ''),
             'warnings': ' | '.join(list(state.get('readWarnings') or []) + list(d.get('warnings') or [])),
+            'explain': json.dumps(d.get('explain'), separators=(',', ':')) if d.get('explain') else '',
         }
         with open(path, 'a', newline='', encoding='utf-8-sig' if not os.path.exists(path) else 'utf-8') as f:
             w = csv.DictWriter(f, fieldnames=DECISION_FIELDS)

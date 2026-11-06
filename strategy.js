@@ -482,6 +482,49 @@
     return { ev, eqC: pSum ? eqSum / pSum : null, allFold, folds, cases };
   }
 
+  /**
+   * A short structured "why" for a postflop decision: our hand and equity, each opponent's range size
+   * and how reliable the read is, what our line represents, the price, every option's EV, and for a
+   * bet: which of their hands we expect to fold or call, and whether we block their strong hands.
+   */
+  function explainDecision({ ctx, best, eq, feat, heroMade, villains, tables, street, pot, board, hero }) {
+    const abs = E.strengthPercentiles(board);
+    const hk = hero[0] < hero[1] ? hero[0] * 52 + hero[1] : hero[1] * 52 + hero[0];
+    const conf = n => (n >= 100 ? 'high' : n >= 40 ? 'medium' : n >= 15 ? 'low' : 'none (population average)');
+    const cat = c => { const n = E.handName(E.evaluate([c[0], c[1], ...board])); return n; };
+    const mix = r => {  // weighted share of each hand type
+      const m = {}; let t = 0;
+      for (const c of r) { const w = c.length > 2 ? c[2] : 1, k = cat(c); m[k] = (m[k] || 0) + w; t += w; }
+      return Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k, w]) => `${k} ${Math.round(100 * w / t)}%`).join(', ');
+    };
+    const out = {
+      hand: `${heroMade} (beats ${Math.round(100 * (abs.get(hk) ?? 0))}% of hands on this board)`,
+      equity: +eq.toFixed(3),
+      opponents: villains.map((v, i) => ({ name: v.name, combos: Math.round(E.rangeSize(v.combos)), read: conf(v.hands || 0), range: mix(tables[i].map(t => t.c)) })),
+      ourPerceivedCombos: ctx.heroRange ? Math.round(E.rangeSize(ctx.heroRange)) : null,
+      price: ctx.toCall > 0 ? +(ctx.toCall / (pot + ctx.toCall)).toFixed(3) : null,
+      chosen: { action: best.action, ev: +(best.ev || 0).toFixed(2), foldEst: best.foldEst != null ? +best.foldEst.toFixed(3) : null, eqWhenCalled: best.eqC != null ? +best.eqC.toFixed(3) : null },
+    };
+    // for a bet/raise against one opponent: who folds, who calls, and our blockers
+    if (['BET', 'RAISE', 'ALL-IN'].includes(best.action) && villains.length === 1 && MODEL.rangeFolds && best.add) {
+      const v = villains[0], totalTo = best.amount, add = best.add;
+      const callAmt = Math.max(0, Math.min(totalTo - (v.bet || 0), v.stack != null ? v.stack : Infinity));
+      let perceived = null;
+      if (ctx.heroRange) { try { perceived = E.weightRange(ctx.heroRange, board, (v.bet || 0) > 0 ? 'raise' : 'bet', { dead: hero }); } catch (e) { perceived = null; } }
+      const r = rangeResponse(tables[0], abs, street, callAmt / (pot + add + callAmt), (v.bet || 0) > 0, (v.bet || 0) > 0 ? v.foldToRaise : v.foldOverride, perceived, board);
+      const contW = new Map(r.cont.map(c => [c[0] * 52 + c[1], c[2]]));
+      const folding = tables[0].map(t => [t.c[0], t.c[1], t.w - (contW.get(t.c[0] * 52 + t.c[1]) || 0)]).filter(c => c[2] > 1e-6);
+      out.theyFold = folding.length ? mix(folding) : 'nothing';
+      out.theyCall = r.cont.length ? mix(r.cont) : 'nothing';
+      // blockers: of all holdings in the top 10% on this board, how many contain one of our cards
+      let strong = 0, blocked = 0;
+      for (const [k, p] of abs) if (p >= 0.9) { strong++; const a = Math.floor(k / 52), b = k % 52; if (hero.includes(a) || hero.includes(b)) blocked++; }
+      out.blockers = strong ? `we hold a card of ${Math.round(100 * blocked / (strong + blocked))}% of the strongest holdings` : 'none';
+      out.uncertainty = `their read is ${conf(v.hands || 0)}; fold estimate ${Math.round(100 * r.fold)}% (needed ${Math.round(100 * add / (pot + add))}%)`;
+    }
+    return out;
+  }
+
   // ─────────────────────────── Postflop ───────────────────────────
   /**
    * ctx: { hero, board, pot, toCall, heroStack, heroBet, bb, position, street,
@@ -597,7 +640,9 @@
       tag = 'FOLD'; reason = `${pct(eq)} vs their range but you need ${pct(ctx.toCall / (pot + ctx.toCall))} — let it go`;
     }
 
+    const explain = explainDecision({ ctx, best, eq, feat, heroMade, villains, tables, street, pot, board, hero, real });
     return {
+      explain,
       street, action: best.action, amount: best.action === 'CALL' || best.action === 'FOLD' || best.action === 'CHECK' ? best.amount : best.amount,
       add: best.add, sizeLabel: best.sizeLabel, tag, reason, equity: eq, eqWhenCalled: best.eqC, foldEst: best.foldEst,
       foldNeeded: best.foldNeeded, ev: best.ev, handName: heroMade, features: feat,
