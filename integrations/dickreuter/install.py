@@ -90,6 +90,8 @@ def main(repo):
             continue
         src = open(path, encoding='utf-8').read()
         new = re.sub(r'(?m)^db\s*=.*$', f'db = {LOCAL_DB}', src)
+        # its remembered strategy ("Trial 1") lived on dickreuter's server; start on the local Default
+        new = re.sub(r'(?m)^last_strategy\s*=\s*Trial 1\s*$', 'last_strategy = Default', new)
         if new != src:
             if not os.path.exists(path + '.orig'):
                 shutil.copy(path, path + '.orig')
