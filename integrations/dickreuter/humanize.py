@@ -256,3 +256,87 @@ def type_amount(amount):
         same = i and digits[i - 1] == ch
         time.sleep(random.uniform(0.04, 0.12) if same else random.uniform(0.07, 0.22))
     time.sleep(random.uniform(0.15, 0.5))      # glance at what you typed
+
+
+# ── sharing the mouse with you ──
+# The bot remembers where it last put the pointer. If the pointer is somewhere else, you moved it:
+# the bot stops what it's doing, waits until you've left the mouse alone for a moment, then carries
+# on from wherever the pointer now is. It still acts before the turn timer runs out.
+
+SETTINGS.update({
+    'user_quiet_s': 1.5,       # how long the mouse must be untouched before the bot takes it
+    'turn_budget_s': 20.0,     # from the bot's decision to its click, at most (then it acts anyway)
+    'idle_after_user_s': 10.0,  # no idle drifts until you've left the mouse alone this long
+})
+
+_state = {'last_set': None, 'user_at': 0.0, 'deadline': None, 'told': False}
+
+
+def _moved(a, b, tol=4):
+    return a is not None and b is not None and (abs(a[0] - b[0]) > tol or abs(a[1] - b[1]) > tol)
+
+
+def note_set(x, y):
+    """The bot just put the pointer here."""
+    _state['last_set'] = (int(x), int(y))
+
+
+def observe(pos):
+    """Look at where the pointer is; True if you've moved it since the bot (or you) last did."""
+    import time
+    pos = (int(pos[0]), int(pos[1]))
+    if _moved(pos, _state['last_set']):
+        _state['user_at'] = time.time()
+        _state['last_set'] = pos  # new baseline: further movement counts as you again
+        return True
+    if _state['last_set'] is None:
+        _state['last_set'] = pos
+    return False
+
+
+def user_idle_for():
+    import time
+    return time.time() - _state['user_at']
+
+
+def begin_turn():
+    """Start the clock for this decision (thinking + waiting for you + clicking)."""
+    import time
+    _state['deadline'] = time.time() + SETTINGS['turn_budget_s']
+    _state['told'] = False
+
+
+def end_turn():
+    _state['deadline'] = None
+
+
+def wait_for_user(get_pos, log=None):
+    """If you're using the mouse, wait until you've stopped for user_quiet_s (or the turn is nearly up)."""
+    import time
+    observe(get_pos())
+    deadline = _state['deadline']
+    if deadline is None or time.time() > deadline + 30:  # not in a turn (pre-action, I'm back): wait 5 s at most
+        deadline = time.time() + 5
+    while user_idle_for() < SETTINGS['user_quiet_s']:
+        if time.time() >= deadline:
+            if log:
+                log.info("You're still using the mouse but time's nearly up - acting now")
+            return
+        if log and not _state['told']:
+            log.info("You're using the mouse - waiting until you stop")
+            _state['told'] = True
+        time.sleep(0.25)
+        observe(get_pos())
+
+
+def glide(points, move, get_pos):
+    """Move along points; stop (return False) as soon as the pointer isn't where we left it."""
+    import time
+    for x, y, dt in points:
+        if _state['last_set'] is not None and _moved(get_pos(), _state['last_set']):
+            observe(get_pos())
+            return False
+        move(x, y)
+        note_set(x, y)
+        time.sleep(dt)
+    return True

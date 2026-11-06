@@ -138,8 +138,7 @@ def main(repo):
     mm = os.path.join(pkg, 'tools', 'mouse_mover.py')
     # mouse_mover patched by an older version of this installer: start again from dickreuter's original
     _mm_src = open(mm, encoding='utf-8').read()
-    if os.path.exists(mm + '.orig') and 'poker-coach' in _mm_src and ('humanize v2' not in _mm_src or
-            ('exact bet' in _mm_src and 'exact bet v2' not in _mm_src)):
+    if os.path.exists(mm + '.orig') and 'poker-coach' in _mm_src and 'humanize v3' not in _mm_src:
         shutil.copy(mm + '.orig', mm)
     patch(mm,
           "log = logging.getLogger(__name__)\n",
@@ -274,37 +273,50 @@ def main(repo):
     # then drift off once (or stay). Between turns the mouse sits still.
     patch(mm,
           "    def mouse_mover(self, x1, y1, x2, y2):\n",
-          "    def mouse_mover(self, x1, y1, x2, y2):  # poker-coach: humanize v2\n"
+          "    def mouse_mover(self, x1, y1, x2, y2):  # poker-coach: humanize v3\n"
           "        from poker.tools import humanize\n"
-          "        for x, y, dt in humanize.path(x1, y1, x2, y2):\n"
-          "            if self.vbox_mode:\n"
+          "        if self.vbox_mode:\n"
+          "            for x, y, dt in humanize.path(x1, y1, x2, y2):\n"
           "                self.mouse_move_vbox(x, y)\n"
-          "            else:\n"
-          "                self.mouse.move(x, y)\n"
-          "            time.sleep(dt)\n"
+          "                time.sleep(dt)\n"
+          "        else:\n"
+          "            # share the mouse: if you move it mid-glide, stop, wait for you, start again from there\n"
+          "            for attempt in range(5):\n"
+          "                humanize.wait_for_user(self.mouse.position, log)\n"
+          "                sx, sy = self.mouse.position() if attempt else (x1, y1)\n"
+          "                humanize.note_set(sx, sy)\n"
+          "                if humanize.glide(humanize.path(sx, sy, x2, y2), self.mouse.move, self.mouse.position):\n"
+          "                    break\n"
           "        self.old_x, self.old_y = x2, y2\n\n"
           "    def _mouse_mover_jittery(self, x1, y1, x2, y2):  # dickreuter's original\n",
-          "poker-coach: humanize v2")
+          "poker-coach: humanize v3")
     patch(mm,
           "        self.mouse_mover(old_x1, old_y1, x1, y1)\n"
           "        self.mouse_clicker(x1, y1, x2 - x1, y2 - y1)",
           "        from poker.tools import humanize  # poker-coach: humanize (aim, press, hold, release)\n"
           "        tx, ty = humanize.aim(x1, y1, x2, y2)\n"
-          "        self.mouse_mover(old_x1, old_y1, tx, ty)\n"
-          "        time.sleep(np.random.uniform(0.04, 0.16))\n"
+          "        for attempt in range(4):\n"
+          "            self.mouse_mover(old_x1, old_y1, tx, ty)\n"
+          "            time.sleep(np.random.uniform(0.04, 0.16))\n"
+          "            # only press if the pointer is still on the spot (you didn't grab it just now)\n"
+          "            if self.vbox_mode or not humanize.observe(self.mouse.position()):\n"
+          "                break\n"
+          "            old_x1, old_y1 = self.mouse.position()\n"
           "        if self.vbox_mode or not hasattr(self.mouse, 'press'):\n"
           "            self.click(tx, ty)\n"
           "        else:\n"
           "            self.mouse.press(tx, ty)\n"
           "            time.sleep(humanize.click_hold())\n"
           "            self.mouse.release(tx, ty)\n"
+          "            humanize.note_set(tx, ty)\n"
           "        self.old_x, self.old_y = tx, ty\n"
           "        time.sleep(np.random.uniform(0.15, 0.45))",
           "poker-coach: humanize (aim, press, hold, release)")
     patch(mm,
           "    def move_mouse_away_from_buttons_jump(self):\n",
           "    def move_mouse_away_from_buttons_jump(self):  # poker-coach: humanize idle\n"
-          "        # dickreuter calls this every loop: mostly still, with a small lazy drift now and then\n"
+          "        # dickreuter calls this every loop: mostly still, with a small lazy drift now and then,\n"
+          "        # and never while you're using the mouse\n"
           "        from poker.tools import humanize\n"
           "        if self.vbox_mode:\n"
           "            return\n"
@@ -312,11 +324,12 @@ def main(repo):
           "        last = getattr(self, '_idle_last', now)\n"
           "        self._idle_last = now\n"
           "        x, y = self.mouse.position()\n"
+          "        humanize.observe((x, y))\n"
+          "        if humanize.user_idle_for() < humanize.SETTINGS['idle_after_user_s']:\n"
+          "            return\n"
           "        target = humanize.idle_move(x, y, now - last)\n"
           "        if target:\n"
-          "            for px, py, dt in humanize.path(x, y, *target, idle=True):\n"
-          "                self.mouse.move(px, py)\n"
-          "                time.sleep(dt)\n\n"
+          "            humanize.glide(humanize.path(x, y, *target, idle=True), self.mouse.move, self.mouse.position)\n\n"
           "    def _move_mouse_away_from_buttons_jump_original(self):\n",
           "poker-coach: humanize idle")
     patch(mm,
@@ -328,13 +341,18 @@ def main(repo):
           "        from poker.tools import humanize\n"
           "        if not self.vbox_mode:\n"
           "            (x1, y1) = self.mouse.position()\n"
+          "            if humanize.observe((x1, y1)) or humanize.user_idle_for() < 3:\n"
+          "                return  # you've got the mouse: leave it be\n"
           "        else:\n"
           "            x1, y1 = self.old_x, self.old_y\n"
           "        target = humanize.after_action_target(x1, y1)\n"
           "        if target:\n"
           "            time.sleep(np.random.uniform(0.1, 0.6))\n"
           "            try:\n"
-          "                self.mouse_mover(x1, y1, *target)\n"
+          "                if self.vbox_mode:\n"
+          "                    self.mouse_mover(x1, y1, *target)\n"
+          "                else:\n"
+          "                    humanize.glide(humanize.path(x1, y1, *target), self.mouse.move, self.mouse.position)\n"
           "            except Exception:\n"
           "                log.warning('Moving mouse away failed')\n"
           "        return\n",
@@ -397,6 +415,7 @@ def main(repo):
           "                if self.gui_signals.ui.auto_act.isChecked():\n"
           "                    try:  # poker-coach: humanize think time\n"
           "                        from poker.tools import humanize\n"
+          "                        humanize.begin_turn()\n"
           "                        wait = humanize.think_time(getattr(d, 'coach_state', None), getattr(d, 'coach', None))\n"
           "                        log.info(f'Thinking for {wait:.1f}s before acting')\n"
           "                        time.sleep(wait)\n"
@@ -404,6 +423,11 @@ def main(repo):
           "                        log.warning(f'think time failed: {e}')\n"
           "                    mouse.mouse_action(mouse_target, table.tlc, action_options)\n",
           "poker-coach: humanize think time")
+    patch(main_py,  # machines that already have the think-time patch: start the turn clock too
+          "                        wait = humanize.think_time(getattr(d, 'coach_state', None), getattr(d, 'coach', None))\n",
+          "                        humanize.begin_turn()  # poker-coach: turn clock\n"
+          "                        wait = humanize.think_time(getattr(d, 'coach_state', None), getattr(d, 'coach', None))\n",
+          "humanize.begin_turn()")
 
     # "I'm back" after sitting out: only click it when the bot may act; otherwise wait for you.
     patch(tsb,

@@ -558,6 +558,14 @@ def preaction(table, history, mouse):
         if len(_preaction_done) > 50:
             for k in list(_preaction_done)[:-10]:
                 _preaction_done.pop(k, None)
+        try:
+            from poker.tools import humanize
+            humanize.observe(mouse.mouse.position())
+            if humanize.user_idle_for() < humanize.SETTINGS['user_quiet_s'] * 2:
+                _preaction_done.pop(game, None)  # you're using the mouse: maybe later this hand
+                return False
+        except Exception:
+            pass
         if chen(cards) > PREACTION['max_chen'] or random.random() > PREACTION['chance']:
             return False
         # not on the button (might steal) or in the blinds (might check for free)
