@@ -105,7 +105,7 @@ def main(repo):
     mm = os.path.join(pkg, 'tools', 'mouse_mover.py')
     # mouse_mover patched by an older version of this installer: start again from dickreuter's original
     _mm_src = open(mm, encoding='utf-8').read()
-    if os.path.exists(mm + '.orig') and 'poker-coach' in _mm_src and 'humanize v1' not in _mm_src:
+    if os.path.exists(mm + '.orig') and 'poker-coach' in _mm_src and 'humanize v2' not in _mm_src:
         shutil.copy(mm + '.orig', mm)
     patch(mm,
           "log = logging.getLogger(__name__)\n",
@@ -240,7 +240,7 @@ def main(repo):
     # then drift off once (or stay). Between turns the mouse sits still.
     patch(mm,
           "    def mouse_mover(self, x1, y1, x2, y2):\n",
-          "    def mouse_mover(self, x1, y1, x2, y2):  # poker-coach: humanize v1\n"
+          "    def mouse_mover(self, x1, y1, x2, y2):  # poker-coach: humanize v2\n"
           "        from poker.tools import humanize\n"
           "        for x, y, dt in humanize.path(x1, y1, x2, y2):\n"
           "            if self.vbox_mode:\n"
@@ -250,7 +250,7 @@ def main(repo):
           "            time.sleep(dt)\n"
           "        self.old_x, self.old_y = x2, y2\n\n"
           "    def _mouse_mover_jittery(self, x1, y1, x2, y2):  # dickreuter's original\n",
-          "poker-coach: humanize v1")
+          "poker-coach: humanize v2")
     patch(mm,
           "        self.mouse_mover(old_x1, old_y1, x1, y1)\n"
           "        self.mouse_clicker(x1, y1, x2 - x1, y2 - y1)",
@@ -270,8 +270,7 @@ def main(repo):
     patch(mm,
           "    def move_mouse_away_from_buttons_jump(self):\n",
           "    def move_mouse_away_from_buttons_jump(self):  # poker-coach: humanize idle\n"
-          "        # dickreuter calls this every loop; the mouse sits still (or, if POKER_COACH_IDLE_MOVES is set,\n"
-          "        # very occasionally drifts a little) until it's time to act\n"
+          "        # dickreuter calls this every loop: mostly still, with a small lazy drift now and then\n"
           "        from poker.tools import humanize\n"
           "        if self.vbox_mode:\n"
           "            return\n"
@@ -281,7 +280,9 @@ def main(repo):
           "        x, y = self.mouse.position()\n"
           "        target = humanize.idle_move(x, y, now - last)\n"
           "        if target:\n"
-          "            self.mouse_mover(x, y, *target)\n\n"
+          "            for px, py, dt in humanize.path(x, y, *target, idle=True):\n"
+          "                self.mouse.move(px, py)\n"
+          "                time.sleep(dt)\n\n"
           "    def _move_mouse_away_from_buttons_jump_original(self):\n",
           "poker-coach: humanize idle")
     patch(mm,

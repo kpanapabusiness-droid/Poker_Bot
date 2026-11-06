@@ -44,8 +44,9 @@ SETTINGS = {
     'after_drift_px': (60, 260),
 
     # waiting between turns: occasional small idle movement (0 = never)
-    'idle_moves_per_min': float(os.environ.get('POKER_COACH_IDLE_MOVES', '0')),
-    'idle_drift_px': (15, 90),
+    'idle_moves_per_min': float(os.environ.get('POKER_COACH_IDLE_MOVES', '1.5')),  # 0 = dead still
+    'idle_drift_px': (10, 70),
+    'idle_speed_px_per_s': (60, 220),  # idle drifts are lazy, not reaches
 }
 
 
@@ -63,7 +64,8 @@ def think_time(state=None, decision=None):
     board = state.get('board') or []
     pot, to_call = float(state.get('pot') or 0), float(state.get('toCall') or 0)
     stack = float(state.get('heroStack') or 0) or 1.0
-    big = pot > 0.3 * stack or to_call > 0.25 * stack or action == 'ALLIN' or 'ALL' in action
+    allin = action.replace('-', '').replace('_', '').replace(' ', '') == 'ALLIN'
+    big = pot > 0.3 * stack or to_call > 0.25 * stack or allin
     if not board and tag == 'CHART' and action in ('FOLD', 'CHECK'):
         median = S['think_easy']
     elif big or len(board) == 5:
@@ -112,12 +114,15 @@ def _segment(x1, y1, x2, y2, duration):
     return pts
 
 
-def path(x1, y1, x2, y2):
-    """Points for one movement from (x1, y1) to (x2, y2), with the wait after each point."""
+def path(x1, y1, x2, y2, idle=False):
+    """Points for one movement from (x1, y1) to (x2, y2), with the wait after each point.
+    idle=True: a slow lazy drift (no overshoot) for waiting between turns."""
     S = SETTINGS
     dist = math.hypot(x2 - x1, y2 - y1)
     if dist < 2:
         return [(int(x2), int(y2), 0.01)]
+    if idle:
+        return _segment(x1, y1, x2, y2, max(0.3, dist / random.uniform(*S['idle_speed_px_per_s'])))
     duration = max(S['min_move_s'], dist / random.uniform(*S['speed_px_per_s']))
     if dist > 80 and random.random() < S['overshoot_chance']:
         f = 1 + random.uniform(*S['overshoot_frac'])
@@ -154,7 +159,7 @@ def after_action_target(x, y):
 
 
 def idle_move(x, y, seconds_since_last_call=1.0):
-    """While waiting: very occasionally a small slow drift. Off unless POKER_COACH_IDLE_MOVES is set."""
+    """While waiting: now and then (about idle_moves_per_min times a minute) a small slow drift."""
     rate = SETTINGS['idle_moves_per_min']
     if rate <= 0 or random.random() > rate * seconds_since_last_call / 60:
         return None
