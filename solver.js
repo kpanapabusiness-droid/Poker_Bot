@@ -285,13 +285,18 @@
   }
 
   /**
-   * River advice in strategy.js's decision format, for one opponent. ctx is strategy.js's context
+   * River advice in strategy.js's decision format, for one opponent, when we're first to act or
+   * checked to (pass whenFacingBet: true to also use it facing a bet). ctx is strategy.js's context
    * (hero, board, pot incl. bets, toCall, heroStack, heroBet, bb, inPosition, actions, villains with
    * combos and stack). heroRange: our own likely range (combos). Returns null when it doesn't apply
    * (not the river, more than one opponent). Plays the solver's mix with a repeatable seeded draw.
    */
-  function adviseRiver(ctx, { heroRange, seed = '', heroName = 'Hero', iterations = 150, timeLimitMs = 700 } = {}) {
+  function adviseRiver(ctx, { heroRange, seed = '', heroName = 'Hero', iterations = 150, timeLimitMs = 700, whenFacingBet = false } = {}) {
     if (!ctx || ctx.board.length !== 5 || !ctx.villains || ctx.villains.length !== 1) return null;
+    // Facing a bet, the answer hangs on how many bluffs their range really has, and our range model
+    // has no bet-size information to judge that by. In simulations the solver lost money calling
+    // there, so by default it only decides when we're first to act or checked to.
+    if ((ctx.toCall || 0) > 0 && !whenFacingBet) return null;
     const v = ctx.villains[0];
     const facing = ctx.toCall || 0;
     const pot = Math.max(ctx.pot - facing, ctx.bb || 1);

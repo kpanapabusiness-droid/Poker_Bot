@@ -44,6 +44,10 @@ spot('Pure air on the river, checked to you vs folder', { hero: h('6s5s'), board
 spot('Pure air on the river vs a calling station', { hero: h('6s5s'), board: h('AhKd9c2hQc'), position: 'BTN', pot: 100, toCall: 0, villains: [{ name: 'V', position: 'BB', stack: 1000, bet: 0, foldOverride: 0.05 }] }, 'CHECK');
 spot('Nuts on the river facing a bet', { hero: h('AsKs'), board: h('QsJsTs2d3c'), position: 'BTN', pot: 200, toCall: 100, villains: [{ name: 'V', position: 'CO', stack: 1000, bet: 100 }] }, ['RAISE', 'ALL-IN'], 'VALUE');
 spot('Short stack: top pair, checked to, SPR < 1', { hero: h('AsQd'), board: h('Ah8c3d'), position: 'BTN', pot: 200, toCall: 0, heroStack: 150, villains: [{ name: 'V', position: 'BB', stack: 600, bet: 0 }] }, ['ALL-IN', 'BET'], 'VALUE');
+// Small blind facing an open: 3-bet or fold, no flat calls (pairs at a set-mining price excepted).
+spot('SB facing a CO open with AJs (no flat from the small blind)', { hero: h('AhJh'), board: [], position: 'SB', pot: 35, toCall: 20, heroBet: 5, actions: [{ type: 'post', actor: 'Hero', amount: 5 }, { type: 'post', actor: 'B', amount: 10 }, ...raiseBy('V', 30)], villains: [{ name: 'V', position: 'CO', stack: 1000, bet: 30 }, { name: 'B', position: 'BB', stack: 1000, bet: 10 }] }, ['FOLD', 'RAISE']);
+// We bet the flop and got raised: no re-raise without a strong hand.
+spot('Bet the flop with a draw, got raised: no re-raise war', { hero: h('QhJh'), board: h('Th4h2c'), position: 'BTN', pot: 260, toCall: 120, heroBet: 60, villains: [{ name: 'V', position: 'BB', stack: 820, bet: 180 }] }, ['CALL', 'FOLD']);
 // A passive player who folds a lot when they check doesn't fold much once they've bet: don't raise-bluff them.
 const passiveBet = E.narrowRange(E.allCombos(), 'Ah9c4d', 'bet', { bluffKeep: 0.06 });
 spot('Air facing a passive player\'s flop bet (high fold-to-bet, low aggression)', { hero: h('6s5h'), board: h('Ah9c4d'), position: 'BTN', pot: 150, toCall: 50, villains: [{ name: 'V', position: 'BB', stack: 1000, bet: 50, combos: passiveBet, foldOverride: 0.8, aggression: 0.3 }] }, 'FOLD');

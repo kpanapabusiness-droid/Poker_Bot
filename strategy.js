@@ -173,11 +173,15 @@
       if (bluff) return out('RAISE', threeBetTo, 'BLUFF', `3-bet bluff: ${hc} blocks big aces and plays OK if called`);
       const price = ctx.toCall;
       const setMine = /^(\w)\1$/.test(hc) && price <= 0.07 * eff; // pocket pairs need ~15:1 implied odds
-      const flatOk = has(hero, RANGES.flat) || (pos === 'BTN' && has(hero, RANGES.flatBtnExtra));
+      // From the small blind, flatting a raise is the worst spot at the table (out of position, with
+      // the big blind still to act): 3-bet or fold, except pocket pairs at a good set-mining price.
+      const flatOk = (pos !== 'SB' || setMine) && (has(hero, RANGES.flat) || (pos === 'BTN' && has(hero, RANGES.flatBtnExtra)));
       if (flatOk && (!/^(\w)\1$/.test(hc) || setMine))
         return out('CALL', price, 'CHART', `Call: ${hc} plays well vs a ${oPos} open${ip ? ' with position' : ''}`);
       if (pos === 'BB' && has(hero, RANGES.flat + ',' + RANGES.bbDefendExtra)) {
-        const eq = heroEquity(hero, [], [E.rfiRange(oPos === 'BB' ? 'SB' : oPos)], 2500);
+        // Their actual opening range when we have one (tracked players), else the standard chart.
+        const openRange = opener && opener.combos && opener.combos.length ? opener.combos : E.rfiRange(oPos === 'BB' ? 'SB' : oPos);
+        const eq = heroEquity(hero, [], [openRange], 2500);
         const need = price / (ctx.pot + price);
         if (eq * MODEL.realise.oop >= need)
           return out('CALL', price, 'CHART', `Defend the big blind: ${pct(eq)} vs their range, you need ${pct(need)}`);
@@ -285,6 +289,13 @@
     let best = options[0];
     const passive = options.find(o => ['CHECK', 'CALL'].includes(o.action));
     if (passive && best !== passive && best.ev - passive.ev < MODEL.preferSimpleWithin * pot) best = passive;
+    // We bet and got raised: a re-raise only makes sense with a strong hand. Their raise range is
+    // much stronger than the model's one-street guess, and re-raise wars without the goods are how
+    // stacks get lost (seen in simulations), so non-value re-raises fall back to call or fold.
+    if (facing && (ctx.heroBet || 0) > 0 && ['RAISE', 'ALL-IN'].includes(best.action) && best.eqC != null && best.eqC < 0.6) {
+      const alt = options.filter(o => o.action === 'CALL' || o.action === 'FOLD' || (o.action === 'ALL-IN' && o.eqC == null)).sort((a, b) => b.ev - a.ev)[0];
+      if (alt) best = alt;
+    }
     if (best.action === 'CALL' && best.ev < 0) best = options.find(o => o.action === 'FOLD') || best;
 
     // Explain it

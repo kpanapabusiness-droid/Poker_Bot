@@ -443,7 +443,8 @@
     const b = parseCards(board);
     const used = new Set(b);
     const aggressive = /bet|raise|allin/.test(action);
-    const keepShare = aggressive ? bluffKeep : action === 'call' ? floatKeep : 1;
+    // a raise is a stronger range than a bet: fewer bluffs survive it
+    const keepShare = aggressive ? (/raise|allin/.test(action) ? bluffKeep * 0.4 : bluffKeep) : action === 'call' ? floatKeep : 1;
     if (keepShare >= 1) return combos;
     const every = Math.max(1, Math.round(1 / keepShare));
     const lateStreet = b.length >= 4;

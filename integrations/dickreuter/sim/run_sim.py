@@ -146,7 +146,38 @@ def prepared_copy(dr_dir):
     return tmp
 
 
-def run(hands, lineup, seed, dr_dir, bb=2.0, stack=200.0, progress=True, learn=True, detail=None):
+def summarise(per_pair, agents, kinds, hands_done, played, seed, lineup, t0):
+    out = {'decks': hands_done, 'hands_played': played, 'seed': seed, 'lineup': lineup, 'minutes': round((time.time() - t0) / 60, 1), 'bots': {}}
+    for k, v in per_pair.items():
+        if not v:
+            continue
+        mean = sum(v) / len(v)  # bb per player per deck (= 2 hands)
+        sd = math.sqrt(sum((x - mean) ** 2 for x in v) / max(1, len(v) - 1))
+        ci = 1.96 * sd / math.sqrt(len(v))
+        bots = [a for a in agents if getattr(a, 'kind', '') == k]
+        dec = sum(getattr(a, 'decisions', 0) for a in bots)
+        out['bots'][k] = {'bb_per_100': round(mean / 2 * 100, 1), 'ci95': round(ci / 2 * 100, 1),
+                          'decisions': dec, 'errors': sum(getattr(a, 'errors', 0) for a in bots),
+                          'sec_per_decision': round(sum(getattr(a, 'seconds', 0) for a in bots) / dec, 3) if dec else None,
+                          'actions': _merge([getattr(a, 'actions', {}) for a in bots])}
+    return out
+
+
+def _save(out, path, rows, detail):
+    """Write results so far (a long run that gets interrupted still leaves its numbers)."""
+    if path:
+        json.dump(out, open(path + '.tmp', 'w'), indent=2)
+        os.replace(path + '.tmp', path)
+    if detail and rows:
+        import csv
+        with open(detail + '.tmp', 'w', newline='') as f:
+            w = csv.DictWriter(f, fieldnames=list(rows[0]))
+            w.writeheader()
+            w.writerows(rows)
+        os.replace(detail + '.tmp', detail)
+
+
+def run(hands, lineup, seed, dr_dir, bb=2.0, stack=200.0, progress=True, learn=True, detail=None, out_path=None):
     from local_server import DEFAULT_STRATEGY
     dr_dir = prepared_copy(dr_dir)
     strategy = dict(DEFAULT_STRATEGY, bigBlind=bb, smallBlind=bb / 2, initialFunds=stack, initialFunds2=stack)
@@ -180,27 +211,14 @@ def run(hands, lineup, seed, dr_dir, bb=2.0, stack=200.0, progress=True, learn=T
             played += 1
         for k in pair:
             per_pair[k].append(pair[k] / kinds.count(k))  # bb per player of this type, both tables
-        if progress and (h + 1) % max(1, hands // 20) == 0:
-            el = time.time() - t0
-            print(f'  {h + 1}/{hands} decks  {el / 60:.1f} min  ' + '  '.join(
-                f'{k} {sum(v) / len(v) / 2 * 100:+.1f}' for k, v in per_pair.items()), flush=True)
-    if detail is not None and rows:
-        import csv
-        with open(detail, 'w', newline='') as f:
-            w = csv.DictWriter(f, fieldnames=list(rows[0]))
-            w.writeheader()
-            w.writerows(rows)
-    out = {'decks': hands, 'hands_played': played, 'seed': seed, 'lineup': lineup, 'minutes': round((time.time() - t0) / 60, 1), 'bots': {}}
-    for k, v in per_pair.items():
-        mean = sum(v) / len(v)  # bb per player per deck (= 2 hands)
-        sd = math.sqrt(sum((x - mean) ** 2 for x in v) / max(1, len(v) - 1))
-        ci = 1.96 * sd / math.sqrt(len(v))
-        bots = [a for a in agents if getattr(a, 'kind', '') == k]
-        dec = sum(getattr(a, 'decisions', 0) for a in bots)
-        out['bots'][k] = {'bb_per_100': round(mean / 2 * 100, 1), 'ci95': round(ci / 2 * 100, 1),
-                          'decisions': dec, 'errors': sum(getattr(a, 'errors', 0) for a in bots),
-                          'sec_per_decision': round(sum(getattr(a, 'seconds', 0) for a in bots) / dec, 3) if dec else None,
-                          'actions': _merge([getattr(a, 'actions', {}) for a in bots])}
+        if (h + 1) % max(1, hands // 20) == 0:
+            _save(summarise(per_pair, agents, kinds, h + 1, played, seed, lineup, t0), out_path, rows, detail)
+            if progress:
+                el = time.time() - t0
+                print(f'  {h + 1}/{hands} decks  {el / 60:.1f} min  ' + '  '.join(
+                    f'{k} {sum(v) / len(v) / 2 * 100:+.1f}' for k, v in per_pair.items()), flush=True)
+    out = summarise(per_pair, agents, kinds, hands, played, seed, lineup, t0)
+    _save(out, out_path, rows, detail)
     return out
 
 
@@ -222,13 +240,11 @@ def main():
     ap.add_argument('--no-learn', action='store_true', help="don't let the coach learn opponents during the run")
     ap.add_argument('--detail', help='write one row per player per hand to this CSV')
     o = ap.parse_args()
-    res = run(o.hands, o.lineup.split(','), o.seed, os.path.abspath(o.dickreuter), learn=not o.no_learn, detail=o.detail)
+    res = run(o.hands, o.lineup.split(','), o.seed, os.path.abspath(o.dickreuter), learn=not o.no_learn, detail=o.detail, out_path=o.out)
     print()
     for k, b in sorted(res['bots'].items(), key=lambda kv: -kv[1]['bb_per_100']):
         print(f"{k:<11} {b['bb_per_100']:+7.1f} bb/100  ± {b['ci95']:.1f}  ({b['decisions']} decisions, {b['errors']} errors, {b['sec_per_decision']}s each)")
     print(f"\n{res['hands_played']} hands in {res['minutes']} min. A result is only real if it's bigger than its ± range.")
-    if o.out:
-        json.dump(res, open(o.out, 'w'), indent=2)
 
 
 if __name__ == '__main__':

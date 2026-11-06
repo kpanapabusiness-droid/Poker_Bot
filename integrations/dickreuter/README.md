@@ -56,6 +56,33 @@ python sim/run_sim.py --hands 500 --lineup coach,station   # vs a calling statio
 dickreuter's real strategies lived on its server, so its side plays the `Default` strategy from
 `local_server.py` (thresholds chosen to be sensible, not tuned) plus its own preflop sheet.
 
+### Results so far (6 Nov 2026)
+
+bb/100 for the coach, ± the 95% range. A result only counts if it's bigger than its ± range.
+
+| Coach version | Opponent | Hands | Result |
+|---|---|---|---|
+| Before these fixes (no solver) | dickreuter | 2,000 | −18.5 ± 20.4 |
+| + raise-fold fix, solver | dickreuter | 2,000 (same decks) | −7.8 ± 14.0 |
+| + no small-blind flats, no re-raise wars, tighter raise ranges | dickreuter | 2 × 1,100 (two deck sets; runs cut short by a restart) | −8.6 and +2.9 |
+| Solver on every river spot | coach without solver | 1,200 | −11.2 ± 17.6 |
+| Solver only when first to act / checked to (current) | coach without solver | 1,200 | −2.5 ± 22.0 |
+
+So far the coach is **about even** with dickreuter's default bot. None of the results is outside its
+range, so neither is proven better. What the hand-by-hand detail (`--detail`) showed, and what was fixed:
+
+- Re-raise wars on the flop with medium hands and draws lost whole stacks against a bot that only
+  raises with strong hands → re-raises now need a strong hand, and raise ranges are narrower.
+- Raising a bettor used their fold-to-bet rate (which comes from spots where they *checked*) →
+  raises now use a vs-raise fold model scaled by how often they bluff.
+- Flat calls from the small blind lost about 2.7bb each → 3-bet or fold from the small blind.
+- The solver lost money calling river bets: its answer depends on how many bluffs the opponent's
+  range really has, and the range model can't judge that → it now only decides when we're first
+  to act or checked to. River spots are rare (2% of hands), so its effect needs a much longer run.
+
+Still losing (next to work on): out-of-position play after defending the big blind or opening
+from the small blind, and flop "protection" bets that get called only by better hands.
+
 ## Install
 
 On Windows, the easy way is `windows/setup.bat`: it installs everything, runs the tests and puts
