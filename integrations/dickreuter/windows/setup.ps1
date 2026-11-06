@@ -10,7 +10,7 @@ $problems = @()
 $LogDir = Join-Path $Base 'setup-logs'
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 # Packages dickreuter lists but the bot never uses: a failure here doesn't matter.
-$Optional = @('fastapi_auth', 'jupyter', 'pylint', 'pydocstyle', 'pyinstaller==5.13.0', 'seaborn', 'flask_jwt_extended', 'PyJWT==1.7.0', 'uvicorn==0.23.2', 'xlib')
+$Optional = @('fastapi_auth', 'jupyter', 'pylint', 'pydocstyle', 'pyinstaller==5.13.0', 'flask_jwt_extended', 'PyJWT==1.7.0', 'xlib')
 function Step($msg) { Write-Host "`n=== $msg ===" -ForegroundColor Cyan }
 function RefreshPath { $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User') }
 function Have($cmd) { [bool](Get-Command $cmd -ErrorAction SilentlyContinue) }
@@ -52,18 +52,33 @@ if (-not (Test-Path $Py)) { $Py = Join-Path $Base 'py311-venv\Scripts\python.exe
 
 Step '4/7  dickreuter requirements (this is the slow one: 5-15 min)'
 & $Py -m pip install --upgrade pip
-& $Py -m pip install -r dickreuter-poker\requirements_win.txt *>&1 | Tee-Object -FilePath (Join-Path $LogDir 'pip.txt')
+# dickreuter's list leaves numpy, opencv and scipy unpinned, so pip picks versions built for numpy 2,
+# which break its pinned pandas 2.0.3 and tensorflow 2.12 ("numpy.dtype size changed"). Pin a set that
+# works together, and keep packages the bot never uses out of the main install.
+$constraints = Join-Path $LogDir 'constraints.txt'
+@"
+numpy==1.23.5
+opencv-python==4.8.1.78
+scipy==1.11.4
+contourpy==1.1.1
+lmfit==1.2.2
+"@ | Set-Content -Path $constraints -Encoding ASCII
+$core = Join-Path $LogDir 'requirements-core.txt'
+Get-Content dickreuter-poker\requirements_win.txt | Where-Object { $_.Trim() -and -not $_.StartsWith('#') -and ($Optional -notcontains $_.Trim()) } | Set-Content -Path $core -Encoding ASCII
+& $Py -m pip install -r $core -c $constraints *>&1 | Tee-Object -FilePath (Join-Path $LogDir 'pip.txt')
 if ($LASTEXITCODE -ne 0) {
   Write-Host 'Bulk install failed; trying packages one at a time...' -ForegroundColor Yellow
-  foreach ($line in Get-Content dickreuter-poker\requirements_win.txt) {
-    $pkg = $line.Trim(); if (-not $pkg -or $pkg.StartsWith('#')) { continue }
-    & $Py -m pip install $pkg *>&1 | Tee-Object -FilePath (Join-Path $LogDir 'pip.txt') -Append
-    if ($LASTEXITCODE -ne 0) {
-      if ($Optional -contains $pkg) { Write-Host "  (skipped ${pkg}, not needed by the bot)" }
-      else { $problems += "pip package failed: $pkg" }
-    }
+  foreach ($pkg in Get-Content $core) {
+    & $Py -m pip install $pkg -c $constraints *>&1 | Tee-Object -FilePath (Join-Path $LogDir 'pip.txt') -Append
+    if ($LASTEXITCODE -ne 0) { $problems += "pip package failed: $pkg" }
   }
 }
+foreach ($pkg in $Optional) {
+  & $Py -m pip install $pkg -c $constraints *>&1 | Tee-Object -FilePath (Join-Path $LogDir 'pip-optional.txt') -Append
+  if ($LASTEXITCODE -ne 0) { Write-Host "  (skipped ${pkg}, not needed by the bot)" }
+}
+& $Py -c "import numpy, pandas, cv2, scipy, lmfit, PIL, openpyxl, seaborn, uvicorn, fastapi, matplotlib; print('numpy', numpy.__version__, 'pandas', pandas.__version__, 'opencv', cv2.__version__)" *>&1 | Tee-Object -FilePath (Join-Path $LogDir 'imports.txt')
+if ($LASTEXITCODE -ne 0) { $problems += "dickreuter's main packages don't load together (see setup-logs\imports.txt)" }
 & $Py -m pip install 'https://github.com/simonflueckiger/tesserocr-windows_build/releases/download/tesserocr-v2.6.0-tesseract-5.3.1/tesserocr-2.6.0-cp311-cp311-win_amd64.whl'
 if ($LASTEXITCODE -ne 0) { $problems += 'tesserocr failed to install' }
 
