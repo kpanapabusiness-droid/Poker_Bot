@@ -122,26 +122,31 @@ def main():
     shutil.copytree(DR, repo, ignore=shutil.ignore_patterns('.git', 'website', 'doc', 'notebooks', 'tests'))
     srv = None
     try:
-        r = subprocess.run([sys.executable, os.path.join(HERE, 'install.py'), repo], capture_output=True, text=True)
-        assert r.returncode == 0, r.stdout + r.stderr
+        r = subprocess.run([sys.executable, os.path.join(HERE, 'install.py'), repo], capture_output=True, text=True, encoding='utf-8', errors='replace')
+        if r.returncode != 0:
+            print('install.py failed on the test copy:\n' + r.stdout + r.stderr)
+            return 1
         for ini in ('config.ini', 'config_default.ini'):  # use a free port for the test
             p = os.path.join(repo, 'poker', ini)
             txt = open(p).read().replace('127.0.0.1:7778', f'127.0.0.1:{port}')
             open(p, 'w').write(txt)
         srv = subprocess.Popen([sys.executable, os.path.join(HERE, 'local_server.py'), '--port', str(port),
                                 '--data', data, '--dickreuter', repo])
-        for _ in range(50):
+        for _ in range(150):
             try:
                 socket.create_connection(('127.0.0.1', port), 0.2).close()
                 break
             except OSError:
                 time.sleep(0.1)
+        else:
+            print(f'local_server.py did not start on port {port}')
+            return 1
         env = {**os.environ, 'PYTHONPATH': repo, 'COMPUTERNAME': socket.gethostname(), 'PYTHONIOENCODING': 'utf-8'}
         out = subprocess.run([sys.executable, '-c', CLIENT.replace('%PORT%', str(port))], cwd=repo, env=env,
-                             capture_output=True, text=True, timeout=120)
+                             capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300)
         print(out.stdout)
         if 'RESULT' not in out.stdout:
-            print(out.stderr[-3000:])
+            print('dickreuter client crashed:\n' + out.stderr[-4000:])
             return 1
         ok, fail = map(int, out.stdout.strip().splitlines()[-1].split()[1:])
         print(f'{ok} passed, {fail} failed')

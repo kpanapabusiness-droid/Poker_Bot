@@ -7,6 +7,10 @@ New-Item -ItemType Directory -Force -Path $Base | Out-Null
 Start-Transcript -Path $Log -Force | Out-Null
 $problems = @()
 
+$LogDir = Join-Path $Base 'setup-logs'
+New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+# Packages dickreuter lists but the bot never uses: a failure here doesn't matter.
+$Optional = @('fastapi_auth', 'jupyter', 'pylint', 'pydocstyle', 'pyinstaller==5.13.0', 'seaborn', 'flask_jwt_extended', 'PyJWT==1.7.0', 'uvicorn==0.23.2', 'xlib')
 function Step($msg) { Write-Host "`n=== $msg ===" -ForegroundColor Cyan }
 function RefreshPath { $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User') }
 function Have($cmd) { [bool](Get-Command $cmd -ErrorAction SilentlyContinue) }
@@ -48,20 +52,23 @@ if (-not (Test-Path $Py)) { $Py = Join-Path $Base 'py311-venv\Scripts\python.exe
 
 Step '4/7  dickreuter requirements (this is the slow one: 5-15 min)'
 & $Py -m pip install --upgrade pip
-& $Py -m pip install -r dickreuter-poker\requirements_win.txt
+& $Py -m pip install -r dickreuter-poker\requirements_win.txt *>&1 | Tee-Object -FilePath (Join-Path $LogDir 'pip.txt')
 if ($LASTEXITCODE -ne 0) {
   Write-Host 'Bulk install failed; trying packages one at a time...' -ForegroundColor Yellow
   foreach ($line in Get-Content dickreuter-poker\requirements_win.txt) {
     $pkg = $line.Trim(); if (-not $pkg -or $pkg.StartsWith('#')) { continue }
-    & $Py -m pip install $pkg
-    if ($LASTEXITCODE -ne 0) { $problems += "pip package failed: $pkg" }
+    & $Py -m pip install $pkg *>&1 | Tee-Object -FilePath (Join-Path $LogDir 'pip.txt') -Append
+    if ($LASTEXITCODE -ne 0) {
+      if ($Optional -contains $pkg) { Write-Host "  (skipped ${pkg}, not needed by the bot)" }
+      else { $problems += "pip package failed: $pkg" }
+    }
   }
 }
 & $Py -m pip install 'https://github.com/simonflueckiger/tesserocr-windows_build/releases/download/tesserocr-v2.6.0-tesseract-5.3.1/tesserocr-2.6.0-cp311-cp311-win_amd64.whl'
 if ($LASTEXITCODE -ne 0) { $problems += 'tesserocr failed to install' }
 
 Step '5/7  Plug the coach brain into dickreuter'
-& $Py poker_bot\integrations\dickreuter\install.py dickreuter-poker
+& $Py poker_bot\integrations\dickreuter\install.py dickreuter-poker *>&1 | Tee-Object -FilePath (Join-Path $LogDir 'install.txt')
 if ($LASTEXITCODE -ne 0) { $problems += 'install.py failed' }
 $Brain = Join-Path $Base 'poker_bot\integrations\dickreuter\brain.js'
 [Environment]::SetEnvironmentVariable('POKER_COACH_BRAIN', $Brain, 'User')
@@ -69,13 +76,13 @@ $env:POKER_COACH_BRAIN = $Brain
 
 Step '6/7  Tests'
 $env:DICKREUTER_DIR = Join-Path $Base 'dickreuter-poker'
-& $Py poker_bot\integrations\dickreuter\test_coach_decision.py
+& $Py poker_bot\integrations\dickreuter\test_coach_decision.py *>&1 | Tee-Object -FilePath (Join-Path $LogDir 'test_coach_decision.txt')
 if ($LASTEXITCODE -ne 0) { $problems += 'bridge tests failed' }
-& $Py poker_bot\integrations\dickreuter\test_local_server.py
+& $Py poker_bot\integrations\dickreuter\test_local_server.py *>&1 | Tee-Object -FilePath (Join-Path $LogDir 'test_local_server.txt')
 if ($LASTEXITCODE -ne 0) { $problems += 'local database tests failed' }
-node poker_bot\integrations\dickreuter\test_brain.js
+node poker_bot\integrations\dickreuter\test_brain.js *>&1 | Tee-Object -FilePath (Join-Path $LogDir 'test_brain.txt')
 if ($LASTEXITCODE -ne 0) { $problems += 'opponent-learning tests failed' }
-node poker_bot\test\test-solver.js
+node poker_bot\test\test-solver.js *>&1 | Tee-Object -FilePath (Join-Path $LogDir 'test_solver.txt')
 if ($LASTEXITCODE -ne 0) { $problems += 'solver tests failed' }
 & $Py -c "import sys; sys.path.insert(0, r'$Base\dickreuter-poker'); import poker.decisionmaker.coach_decision as c; print('coach_decision imports inside dickreuter:', c.Decision.__name__)"
 if ($LASTEXITCODE -ne 0) { $problems += "dickreuter's code doesn't import (a requirement is missing)" }
@@ -109,6 +116,6 @@ if ($problems.Count) {
 } else {
   Write-Host 'All done. Double-click "Start Poker Bot" on your desktop.' -ForegroundColor Green
 }
-Write-Host "Full log: $Log"
+Write-Host "Full log: $Log  (command output in $LogDir)"
 Stop-Transcript | Out-Null
 Read-Host 'Press Enter to close'
