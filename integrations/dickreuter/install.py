@@ -217,6 +217,16 @@ def main(repo):
           "                mouse.move_mouse_away_from_buttons_jump()\n",
           "poker-coach: mouse stays put unless acting")
 
+    # Show the coach's advice in the bot window's "Last Decision" box, not just the button name
+    patch(main_py,
+          '        gui_signals.signal_decision.emit(str(d.decision + " " + sheet_name))\n',
+          '        coach = getattr(d, "coach", None)  # poker-coach: advice in the Last Decision box\n'
+          '        if coach:\n'
+          '            gui_signals.signal_decision.emit(f"{coach.get(\'text\')}  [{coach.get(\'tag\')}]\\n{coach.get(\'reason\') or \'\'}")\n'
+          '        else:\n'
+          '            gui_signals.signal_decision.emit(str(d.decision + " " + sheet_name))\n',
+          'poker-coach: advice in the Last Decision box')
+
     sh = os.path.join(pkg, 'tools', 'strategy_handler.py')
     patch(sh,
           "        if 'collusion' not in self.selected_strategy:\n            self.selected_strategy['collusion'] = 1\n",
