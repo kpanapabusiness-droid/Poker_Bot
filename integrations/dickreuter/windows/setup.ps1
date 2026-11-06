@@ -81,6 +81,14 @@ foreach ($pkg in $Optional) {
 if ($LASTEXITCODE -ne 0) { $problems += "dickreuter's main packages don't load together (see setup-logs\imports.txt)" }
 & $Py -m pip install 'https://github.com/simonflueckiger/tesserocr-windows_build/releases/download/tesserocr-v2.6.0-tesseract-5.3.1/tesserocr-2.6.0-cp311-cp311-win_amd64.whl'
 if ($LASTEXITCODE -ne 0) { $problems += 'tesserocr failed to install' }
+# dickreuter's mouse code needs pywin32 (win32api), which its package list leaves out
+& $Py -m pip install pywin32 -c $constraints *>&1 | Tee-Object -FilePath (Join-Path $LogDir 'pip.txt') -Append
+if ($LASTEXITCODE -ne 0) { $problems += 'pywin32 failed to install' }
+# Load the bot's whole program (without opening its window) to catch any other missing piece
+Push-Location dickreuter-poker
+& $Py -c "import poker.main; print('dickreuter loads OK')" *>&1 | Tee-Object -FilePath (Join-Path $LogDir 'dickreuter-import.txt')
+if ($LASTEXITCODE -ne 0) { $problems += "dickreuter doesn't start: a package is missing (see setup-logs\dickreuter-import.txt)" }
+Pop-Location
 
 Step '5/7  Plug the coach brain into dickreuter'
 & $Py poker_bot\integrations\dickreuter\install.py dickreuter-poker *>&1 | Tee-Object -FilePath (Join-Path $LogDir 'install.txt')
