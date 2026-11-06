@@ -43,6 +43,8 @@ def main(repo):
 
     shutil.copy(os.path.join(HERE, 'coach_decision.py'), os.path.join(pkg, 'decisionmaker', 'coach_decision.py'))
     print("  copied: poker/decisionmaker/coach_decision.py")
+    shutil.copy(os.path.join(HERE, 'card_reader.py'), os.path.join(pkg, 'scraper', 'card_reader.py'))
+    print("  copied: poker/scraper/card_reader.py")
 
     main_py = os.path.join(pkg, 'main.py')
     patch(main_py,
@@ -149,6 +151,71 @@ def main(repo):
               f"            self.{what}_value -= 90\n",
               f"        # poker-coach: removed the '>= 90 → subtract 90' {what} value hack\n",
               f"poker-coach: removed the '>= 90 → subtract 90' {what} value hack")
+
+    # Numbers on "coach_reader" tables (e.g. Torn): dickreuter's own reader uses the same greyscale OCR
+    patch(so,
+          '''def ocr(screenshot, image_area, table_dict, player=None, fast=False):
+''',
+          '''def ocr(screenshot, image_area, table_dict, player=None, fast=False):
+    if table_dict.get('coach_reader'):  # poker-coach: shared amount reader
+        from poker.scraper.card_reader import read_amount
+        try:
+            a = table_dict[image_area][player] if player else table_dict[image_area]
+        except KeyError:
+            return ''
+        v = read_amount(screenshot, (a['x1'], a['y1'], a['x2'], a['y2']))
+        return v if v is not None else ''
+''',
+          'poker-coach: shared amount reader')
+
+    # Cards without a picture of every card: tables with "card_reader" set read them with card_reader.py
+    ts = os.path.join(pkg, 'scraper', 'table_scraper.py')
+    patch(ts,
+          '''    def get_my_cards2(self):
+        """Get my cards"""
+        self.my_cards = []
+''',
+          '''    def get_my_cards2(self):
+        """Get my cards"""
+        self.my_cards = []
+        if self.table_dict.get('card_reader'):  # poker-coach: card reader
+            from poker.scraper.card_reader import read_cards
+            a = self.table_dict['my_cards_area']
+            self.my_cards = read_cards(self.screenshot, (a['x1'], a['y1'], a['x2'], a['y2']), 'hand')
+            log.info(f"My cards: {self.my_cards}")
+            return
+''',
+          'poker-coach: card reader')
+    patch(ts,
+          '''        self.table_cards = []
+        for value in CARD_VALUES:''',
+          '''        self.table_cards = []
+        if self.table_dict.get('card_reader'):  # poker-coach: card reader (board)
+            from poker.scraper.card_reader import read_cards
+            a = self.table_dict['table_cards_area']
+            self.table_cards = read_cards(self.screenshot, (a['x1'], a['y1'], a['x2'], a['y2']), 'board')
+            log.info(f"Table cards: {self.table_cards}")
+            return len(self.table_cards) not in (1, 2)
+        for value in CARD_VALUES:''',
+          'poker-coach: card reader (board)')
+
+    # dickreuter jumps the mouse to the top-right of the screen on every loop and every new hand,
+    # even with "Act automatically" off. Only move it when the bot is allowed to act.
+    patch(main_py,
+          "                mouse.move_mouse_away_from_buttons_jump()\n",
+          "                if self.gui_signals.ui.auto_act.isChecked():  # poker-coach: mouse stays put unless acting\n"
+          "                    mouse.move_mouse_away_from_buttons_jump()\n",
+          "poker-coach: mouse stays put unless acting")
+    tsb = os.path.join(pkg, 'scraper', 'table_screen_based.py')
+    patch(tsb,
+          "            mouse.move_mouse_away_from_buttons_jump()\n",
+          "            try:  # poker-coach: mouse stays put unless acting\n"
+          "                acting = self.gui_signals.ui.auto_act.isChecked()\n"
+          "            except Exception:\n"
+          "                acting = False\n"
+          "            if acting:\n"
+          "                mouse.move_mouse_away_from_buttons_jump()\n",
+          "poker-coach: mouse stays put unless acting")
 
     sh = os.path.join(pkg, 'tools', 'strategy_handler.py')
     patch(sh,

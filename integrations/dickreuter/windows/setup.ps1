@@ -93,6 +93,8 @@ Pop-Location
 Step '5/7  Plug the coach brain into dickreuter'
 & $Py poker_bot\integrations\dickreuter\install.py dickreuter-poker *>&1 | Tee-Object -FilePath (Join-Path $LogDir 'install.txt')
 if ($LASTEXITCODE -ne 0) { $problems += 'install.py failed' }
+& $Py poker_bot\integrations\dickreuter\tables\import_tables.py *>&1 | Tee-Object -FilePath (Join-Path $LogDir 'tables.txt')
+if ($LASTEXITCODE -ne 0) { $problems += 'ready-made tables (Torn) failed to load' }
 $Brain = Join-Path $Base 'poker_bot\integrations\dickreuter\brain.js'
 [Environment]::SetEnvironmentVariable('POKER_COACH_BRAIN', $Brain, 'User')
 $env:POKER_COACH_BRAIN = $Brain
@@ -103,6 +105,8 @@ $env:DICKREUTER_DIR = Join-Path $Base 'dickreuter-poker'
 if ($LASTEXITCODE -ne 0) { $problems += 'bridge tests failed' }
 & $Py poker_bot\integrations\dickreuter\test_local_server.py *>&1 | Tee-Object -FilePath (Join-Path $LogDir 'test_local_server.txt')
 if ($LASTEXITCODE -ne 0) { $problems += 'local database tests failed' }
+& $Py poker_bot\integrations\dickreuter\test_card_reader.py *>&1 | Tee-Object -FilePath (Join-Path $LogDir 'test_card_reader.txt')
+if ($LASTEXITCODE -ne 0) { $problems += 'card reader tests failed' }
 node poker_bot\integrations\dickreuter\test_brain.js *>&1 | Tee-Object -FilePath (Join-Path $LogDir 'test_brain.txt')
 if ($LASTEXITCODE -ne 0) { $problems += 'opponent-learning tests failed' }
 node poker_bot\test\test-solver.js *>&1 | Tee-Object -FilePath (Join-Path $LogDir 'test_solver.txt')

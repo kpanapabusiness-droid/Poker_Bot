@@ -109,6 +109,22 @@ On Windows, the easy way is `windows/setup.bat`: it installs everything, runs th
 
 Set your game's blinds with `python set_blinds.py SMALL BIG` (or **Set Poker Blinds** on the desktop), in the same units as the chips on screen. dickreuter's strategy editor stops at a 10.00 big blind, so these are stored in the local database and override every strategy. The coach reads them from there too.
 
+## Ready-made table: Torn hold'em (9 seats)
+
+`tables/torn_9max.json` is a complete Torn mapping (setup loads it as **Torn holdem 9**), built
+with `tables/build_torn.py` from a screenshot of a real 9-seat table. It doesn't need a picture of
+every card: `card_reader.py` reads cards by the colour of the ink (Torn uses a four-colour deck)
+and the rank with Tesseract, and reads all money amounts itself ("$1,419,983", "$2K"), including
+names. It's measured from the **Poker** heading above the table, so keep the same browser zoom and
+window width you mapped with, and don't scroll the page.
+
+Check a mapping on saved screenshots before playing:
+```
+python tables/check_table.py tables/torn_9max.json SCREENSHOT.png …
+```
+It runs dickreuter's real reading steps and prints cards, board, dealer, who's in, stacks, bets, pot
+and the coach's decision. **Never tick "Act automatically" on Torn**: Torn doesn't allow bots that act.
+
 ## Settings
 
 - `POKER_COACH_POT_INCLUDES_BETS=0` if your table's "total pot" doesn't include the chips in front

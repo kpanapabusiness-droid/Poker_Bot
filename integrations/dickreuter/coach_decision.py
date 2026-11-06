@@ -144,6 +144,47 @@ def _ocr_text(img):
     return best
 
 
+def _box(td, key, seat=None):
+    a = td.get(key)
+    if a is None:
+        return None
+    if seat is not None:
+        a = a.get(str(seat)) if isinstance(a, dict) else None
+    return (a['x1'], a['y1'], a['x2'], a['y2']) if a and 'x1' in a else None
+
+
+def coach_read(t, game_id, n):
+    """Tables marked "coach_reader": read names, stacks, bets and the pot ourselves (greyscale
+    OCR that copes with "$1,419,983" and "$2K"), instead of dickreuter's digits-only reader."""
+    try:
+        from poker.scraper.card_reader import read_amount, read_text  # inside dickreuter (install.py copies it)
+    except ImportError:
+        from card_reader import read_amount, read_text
+    td = t.table_dict
+    img = t.screenshot
+    live = set(getattr(t, 'players_in_game', None) or [])
+    out = {'names': {}, 'stacks': {}, 'bets': {}}
+    for seat in range(0, n):
+        b = _box(td, 'player_funds_area', seat)
+        if b:
+            v = read_amount(img, b)
+            if v is not None:
+                out['stacks'][seat] = v
+        b = _box(td, 'player_pot_area', seat)
+        out['bets'][seat] = (read_amount(img, b) or 0.0) if b else 0.0
+        if seat and seat in live:
+            key = (game_id, seat)
+            if key not in _name_cache:
+                b = _box(td, 'player_name_area', seat)
+                nm = read_text(img, b).strip('_.-') if b else ''
+                if nm:
+                    _name_cache[key] = nm
+            out['names'][seat] = _name_cache.get(key, '')
+    b = _box(td, 'total_pot_area')
+    out['pot'] = read_amount(img, b) if b else None
+    return out
+
+
 def read_seats(t, game_id, n):
     """Returns ({seat: name}, {seat: stack}) for seats 1..n-1, from whatever this table can give."""
     names, stacks = {}, {}
@@ -207,22 +248,34 @@ def table_to_state(t, h=None, p=None):
     bb = _big_blind(t, p)
     dealer = int(_num(getattr(t, 'dealer_position', 0), 0)) % n
     game = getattr(h, 'GameID', None) if h is not None else None
-    hero_bet = _hero_bet(t, h, p, n, dealer, street, bb)
-    names, stacks = read_seats(t, game, n)
+    td = getattr(t, 'table_dict', None) or {}
+    cr = coach_read(t, game, n) if td.get('coach_reader') and getattr(t, 'screenshot', None) is not None else None
+    hero_bet = cr['bets'].get(0, 0.0) if cr else _hero_bet(t, h, p, n, dealer, street, bb)
+    if cr:
+        names, stacks = cr['names'], cr['stacks']
+    else:
+        names, stacks = read_seats(t, game, n)
 
     players = []
     for op in getattr(t, 'other_players', []) or []:
         seat = int(op.get('abs_position', 0)) + 1
+        bet = cr['bets'].get(seat, 0.0) if cr else _num(op.get('pot'))
         players.append({'seat': seat, 'name': names.get(seat, ''), 'stack': stacks.get(seat, _num(op.get('funds'))),
-                        'bet': _num(op.get('pot')), 'inHand': bool(op.get('status') == 1 or op.get('status') is True)})
+                        'bet': bet, 'inHand': bool(op.get('status') == 1 or op.get('status') is True)})
 
-    call_value = getattr(t, 'currentCallValue', None)
-    if call_value in (None, ''):
-        call_value = getattr(t, 'minCall', 0)
-    to_call = 0.0 if getattr(t, 'checkButton', False) else _num(call_value)
-    pot = _num(getattr(t, 'totalPotValue', 0))
-    if not POT_INCLUDES_CURRENT_BETS:
-        pot += hero_bet + sum(pl['bet'] for pl in players)
+    if cr:
+        # what we have to call = the biggest bet in front of anyone, minus ours
+        to_call = max([0.0] + [pl['bet'] for pl in players]) - hero_bet
+        to_call = max(0.0, min(to_call, stacks.get(0, to_call)))
+        pot = cr['pot'] if cr['pot'] is not None else hero_bet + sum(pl['bet'] for pl in players)
+    else:
+        call_value = getattr(t, 'currentCallValue', None)
+        if call_value in (None, ''):
+            call_value = getattr(t, 'minCall', 0)
+        to_call = 0.0 if getattr(t, 'checkButton', False) else _num(call_value)
+        pot = _num(getattr(t, 'totalPotValue', 0))
+        if not POT_INCLUDES_CURRENT_BETS:
+            pot += hero_bet + sum(pl['bet'] for pl in players)
 
     snaps = _hand_memory.get(game, [])
     if len(_hand_memory) > 20:  # only the current hand matters
@@ -230,7 +283,8 @@ def table_to_state(t, h=None, p=None):
             _hand_memory.pop(k, None)
     return {
         'gameId': game, 'heroCards': [str(c) for c in (getattr(t, 'mycards', None) or [])],
-        'board': board, 'pot': pot, 'toCall': to_call, 'heroStack': _num(getattr(t, 'myFunds', 0)),
+        'board': board, 'pot': pot, 'toCall': to_call,
+        'heroStack': (cr['stacks'].get(0) if cr and cr['stacks'].get(0) is not None else _num(getattr(t, 'myFunds', 0))),
         'heroBet': hero_bet, 'bb': bb, 'nSeats': n, 'dealer': dealer,
         'players': players, 'history': [dict(s) for s in snaps],
     }
