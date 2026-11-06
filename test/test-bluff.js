@@ -119,6 +119,45 @@ console.log('\n10. Bluffing less into players who fight back');
   check('a bluff is worth less (vs checking) against a player whose fold rate dropped', ev(0.25) < ev(0.6), { low: ev(0.25), high: ev(0.6) });
 }
 
+console.log('\n11. Choosing which hands bluff (range-level selection, 7 Nov)');
+{
+  const board = 'Ks9s4d2c7s';
+  const them = rng(0.4, [['Ks9s4d', 'call'], ['Ks9s4d2c', 'call'], [board, 'check']], 0.05);
+  const us = rng(0.3, [['Ks9s4d', 'bet'], ['Ks9s4d2c', 'bet']]);
+  const sel = hero => decide({ hero: h(hero), board: h(board), pot: 60, toCall: 0, street: 'river', heroRange: us, villains: [V({ combos: them })] });
+  const a = sel('QhJd'), b = sel('Qs3d');  // Q♠ blocks some of the flushes and K-high flushes that call
+  const ra = a.explain.bluffSelection, rb = b.explain.bluffSelection;
+  check('bluff selection is reported with a rank, a probability and the balanced number of bluffs', ra && ra.prob != null && ra.need > 0, ra);
+  check('a blocker hand ranks at least as high as a non-blocker of similar strength', rb && ra && (rb.rank || 99) <= (ra.rank || 99), { blocker: rb, none: ra });
+  const sdv = sel('9h8h');  // a pair of nines: real showdown value
+  check('a hand with showdown value is not picked as a bluff (checks or value-bets instead)', !(sdv.tag === 'BLUFF'), [sdv.action, sdv.tag, sdv.explain.bluffSelection]);
+  check('probabilities are between 0 and 1', [ra, rb].every(x => !x || (x.prob >= 0 && x.prob <= 1)));
+}
+
+console.log('\n12. Opponent adaptation');
+{
+  const board = 'Ah9c6d2s3h';
+  const them = rng(0.5, [['Ah9c6d', 'check'], ['Ah9c6d2s', 'check'], [board, 'check']]);
+  const us = rng(0.3, [['Ah9c6d', 'check'], ['Ah9c6d2s', 'check']]);
+  const fe = o => S.postflop(ctxOf({ hero: h('8h7h'), board: h(board), pot: 40, toCall: 0, street: 'river', heroRange: us, villains: [V({ combos: them, ...o })] }))
+    .options.filter(x => x.action === 'BET').sort((a, b) => b.amount - a.amount)[0].foldEst;
+  check('an aggressive player is not assumed to fold more just for being aggressive', fe({ aggression: 4, foldOverride: 0.4 }) <= fe({ aggression: 1, foldOverride: 0.4 }) + 0.01);
+  check('a learned "folds less than predicted" correction lowers the fold estimate', fe({ foldBias: -0.2 }) < fe({ foldBias: 0 }) - 0.05, { bias: fe({ foldBias: -0.2 }), none: fe({ foldBias: 0 }) });
+  check('a learned "folds more" correction raises it', fe({ foldBias: 0.15 }) > fe({ foldBias: 0 }) + 0.01, { more: fe({ foldBias: 0.15 }), none: fe({ foldBias: 0 }) });
+}
+
+console.log('\n13. Bet size and EV of the chosen action');
+{
+  const board = 'Ks9s4d2c7s';
+  const them = rng(0.4, [['Ks9s4d', 'call'], ['Ks9s4d2c', 'call'], [board, 'check']], 0.05);
+  const us = rng(0.3, [['Ks9s4d', 'bet'], ['Ks9s4d2c', 'bet']]);
+  const d = S.postflop(ctxOf({ hero: h('AsKd'), board: h(board), pot: 60, toCall: 0, street: 'river', heroRange: us, villains: [V({ combos: them })] }));
+  const best = d.options.reduce((a, b) => (b.ev > a.ev ? b : a));
+  check('the chosen action is the best-EV option or within the uncertainty margin of it', Math.abs(best.ev - d.options.find(o => o.action === d.action && (o.amount === d.amount || d.action === 'CHECK')).ev) <= 0.13 * 60 + 1e-9, { chosen: [d.action, d.amount], best });
+  const bets = d.options.filter(o => o.action === 'BET').map(o => o.foldEst);
+  check('bigger bets are expected to fold more (or equal)', bets.slice(1).every((x, i) => x <= bets[i] + 0.02), bets);
+}
+
 E.setSeed(null);
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

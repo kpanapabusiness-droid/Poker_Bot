@@ -16,7 +16,7 @@ def report(path):
             continue
         seen = set()
         for item in r['agg'].split(';'):
-            street, tag, fe, res = item.split(':')
+            street, tag, fe, res = item.split('|')[0].split(':')[:4]
             if tag.startswith('FACE-'):
                 eq, need = (float(x) for x in fe.split('/'))
                 f = face[(street, tag)]

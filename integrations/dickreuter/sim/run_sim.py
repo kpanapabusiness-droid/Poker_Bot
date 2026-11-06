@@ -295,7 +295,8 @@ def _agg_outcomes(agg, rec, pos):
         later = [a for a in acts[k + 1:] if a[0] == st and a[1] != pos]
         res = 'C' if any(a[2] in ('call', 'raise') for a in later) else 'F'
         fe = d.get('fold_est')
-        out.append(f"{st[0]}:{d['tag']}:{'' if fe is None else round(fe, 3)}:{res}")
+        extra = f"|{d.get('size', '')}|{d.get('texture', '')}|{'IP' if d.get('ip') else 'OOP'}|{d.get('hand', '')}|{d.get('opps', '')}"
+        out.append(f"{st[0]}:{d['tag']}:{'' if fe is None else round(fe, 3)}:{res}{extra}")
     return ';'.join(out)
 
 

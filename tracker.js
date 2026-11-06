@@ -137,7 +137,8 @@
       const s = db.players[name] = db.players[name] || emptyStats();
       s.foldModel = s.foldModel || {};
       const m = s.foldModel[street] = s.foldModel[street] || { n: 0, pred: 0, act: 0 };
-      m.n++; m.pred += pred; m.act += folded ? 1 : 0;
+      // fading memory (×0.97 per bet, ~30 bets): if a player changes how they play, the correction follows
+      m.n = m.n * 0.97 + 1; m.pred = m.pred * 0.97 + pred; m.act = m.act * 0.97 + (folded ? 1 : 0);
     }
 
     /** Feed the current full log; any newly completed hands are counted once. Returns how many hands were added. */

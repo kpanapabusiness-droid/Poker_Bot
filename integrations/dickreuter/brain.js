@@ -340,7 +340,16 @@
     };
     let d = S.decide(ctx);
     const solved = (opts.solver !== false) ? riverSolve(t, ctx, actions, role, villains, opts, d) : null;
-    if (solved) d = solved;
+    if (solved) {
+      // The solver doesn't model folds the way the rest of the coach does; for diagnostics and fold
+      // learning, take the coach's own estimate for the option closest to the solver's bet size.
+      if (['BET', 'RAISE', 'ALL-IN'].includes(solved.action) && d.options) {
+        const near = d.options.filter(o => o.foldEst != null && ['BET', 'RAISE', 'ALL-IN'].includes(o.action))
+          .sort((a, b) => Math.abs(a.amount - solved.amount) - Math.abs(b.amount - solved.amount))[0];
+        if (near) { solved.foldEst = near.foldEst; if (villains.length === 1) solved.villainFolds = { [villains[0].name]: near.foldEst }; }
+      }
+      d = { ...solved, explain: d.explain };
+    }
     const warnings = [...(d.warnings || []), ...villains.flatMap(v => v.warnings || [])];
     return { ...d, text: S.describe(d), position: ctx.position, inPosition: ctx.inPosition,
       ...(warnings.length ? { warnings } : {}),

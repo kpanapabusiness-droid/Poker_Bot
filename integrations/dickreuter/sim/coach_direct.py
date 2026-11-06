@@ -124,8 +124,15 @@ class CoachDirect:
             self.agg.append({'street': street0, 'tag': 'FACE-' + ('FOLD' if a in ('FOLD', 'CHECK') else 'CALL' if a == 'CALL' else 'RAISE'),
                              'eq': d.get('equity'), 'need': need, 'bettor': bettor, 'face': True, 'opps': len(v['in_hand']) - 1})
         if a in ('BET', 'RAISE', 'ALL-IN') and v['board']:
+            add = (d.get('amount') or 0) - v['bets'][0]
+            b = v['board']
+            suits = [c[1] for c in b]; ranks = [c[0] for c in b]
+            texture = ('paired' if len(set(ranks)) < len(ranks) else '') + ('flushy' if max(suits.count(x) for x in set(suits)) >= 3 else '')
+            ex = d.get('explain') or {}
             self.agg.append({'street': v['street'], 'tag': d.get('tag') or a, 'fold_est': d.get('foldEst'),
-                             'pot': v['total_pot'], 'add': (d.get('amount') or 0) - v['bets'][0]})
+                             'pot': v['total_pot'], 'add': add, 'size': round(add / max(1e-9, v['total_pot']), 2),
+                             'texture': texture or 'dry', 'ip': bool(d.get('inPosition')), 'hand': (ex.get('hand') or '?').split(' (')[0],
+                             'opps': len(v['in_hand']) - 1})
         if a in ('FOLD', 'CHECK'):
             return ('check', 0) if v['to_call'] <= 0 else ('fold', 0)
         if a == 'CALL':

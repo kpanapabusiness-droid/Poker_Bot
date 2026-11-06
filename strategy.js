@@ -64,6 +64,8 @@
     // margin (share of the pot) an aggressive line must beat the passive one by: base + unknown × u,
     // u = 1 with no read (< 15 hands), 0.6, 0.3, 0.1 with 100+ hands
     uncertainty: { base: 0.04, unknown: 0.08 },
+    // river/turn bluff selection over our perceived range (see selectBluff)
+    bluffSelect: { on: true, sdvMax: 0.30, blockerWeight: 1.0, exploitEdge: 0.15 },
     // preflop exploit: 3-bet bluffs by the opener's fold-to-3-bet (after seeing them face minSeen 3-bets)
     exploit3bet: { minSeen: 6, wideAt: 0.65, noneAt: 0.35, extra: 'A2s-A3s,K9s,KTs,QTs,JTs,T9s,98s,87s,76s' },
     // How villains respond to our bets/raises (rangeFolds on): each holding continues with probability
@@ -84,7 +86,9 @@
     // call more than a range-reasoner would, so perceivedWeight is 0.25 (it was 0.5) and thresholds lower.
     response: { base: { flop: 0.48, turn: 0.48, river: 0.50 }, priceSlope: 0.6, vsRaise: 0.06, f2bShift: 1.0, width: 0.04, drawCall: 0.95,
                 // perceived-range model: continue when equity vs what our bet represents > price + callBias + stickiness × (f2b − 0.4)
-                callBias: 0.0, stickiness: 1.2, eqWidth: 0.06, perceivedWeight: 0.25, perceivedWeightVsRaise: 0.75, runoutSamples: 48, strongHand: 0.85 },
+                callBias: 0.0, stickiness: 1.2, eqWidth: 0.06, perceivedWeight: 0.25, perceivedWeightVsRaise: 0.75, runoutSamples: 48, strongHand: 0.85,
+                // apparent-strength floors by category index (0 high card, 1 pair, 2 two pair, 3 trips, 4 straight, 5 flush, 6 full house…)
+                naiveFloor: [0, 0, 0.80, 0.88, 0.92, 0.94, 0.97, 0.99, 1] },
     // Stack depth preflop: short (≤ shortBB) drops speculative calls/limps that need deep stacks to
     // pay off; deep (≥ deepBB) adds more of them in position.
     depth: { on: true, shortBB: 40, deepBB: 150, deepFlat: '22-66,A2s-A9s,K9s,Q9s,J9s,T8s,97s,86s,75s,64s,54s' },
@@ -346,9 +350,19 @@
     const drawCall = clamp(R.drawCall - 1.5 * (need - 0.2), 0.15, 0.95);
     let tw = 0, cw = 0;
     const cont = [];
+    // How strong a casual player THINKS their hand is: at least its category name, when their own cards
+    // make it ("I have two pair" with a pair on a paired board, "trips"). True strength can be lower.
+    const rc = {}; for (const c of board) rc[c >> 2] = (rc[c >> 2] || 0) + 1;
+    const cnts = Object.values(rc).sort((a, b) => b - a);
+    const boardCat = cnts[0] >= 3 ? 3 : cnts[0] === 2 && cnts[1] === 2 ? 2 : cnts[0] === 2 ? 1 : 0;  // what the board alone makes
     for (const e of table) {
       const k = e.c[0] < e.c[1] ? e.c[0] * 52 + e.c[1] : e.c[1] * 52 + e.c[0];
-      let p = 1 / (1 + Math.exp(-((absHS.get(k) ?? 0.5) - thr) / R.width));
+      let hs = absHS.get(k) ?? 0.5;
+      if (R.naiveFloor && board.length >= 3) {
+        const cat = E.categoryOf(E.evaluate([e.c[0], e.c[1], ...board]));
+        if (cat > boardCat) hs = Math.max(hs, R.naiveFloor[cat] ?? 0);
+      }
+      let p = 1 / (1 + Math.exp(-(hs - thr) / R.width));
       if (street !== 'river' && e.draw) p = Math.max(p, drawCall);
       tw += e.w; cw += e.w * p;
       if (e.w * p > 1e-6) cont.push([e.c[0], e.c[1], e.w * p]);
@@ -513,6 +527,59 @@
     }
     return PERC.get(key);
   }
+  /**
+   * Which hands in our perceived range should bluff here, at this size, and how often:
+   *   value hands = our holdings with more than half equity against what calls this bet;
+   *   bluff candidates = holdings with little showdown value (equity vs their whole range < sdvMax),
+   *     ranked by how much of their calling range they block, minus their showdown value;
+   *   bluffs needed = value weight × size / (1 + size)  (the balanced value:bluff ratio for this size).
+   * Our hand bluffs if it's among the best candidates; at the boundary it bluffs with that probability
+   * (seeded draw). Against an over-folder, a big EV edge (≥ exploitEdge × pot over checking) bluffs anyway.
+   */
+  function selectBluff({ ctx, best, hero, board, pot, table, villain, passive }) {
+    const B = MODEL.bluffSelect;
+    const size = best.add / Math.max(pot, 1e-9);
+    const ours = ctx.heroRange.filter(c => !board.includes(c[0]) && !board.includes(c[1]));
+    if (ours.length < 10) return null;
+    const theirs = table.map(e => [e.c[0], e.c[1], e.w]);
+    // what calls this bet, from the option's own response model
+    const callAmt = Math.min(best.add, villain.stack != null ? villain.stack : best.add);
+    const absHS = E.strengthPercentiles(board);
+    const perceived = perceivedAfter(ctx.heroRange, board, 'bet', hero, size);
+    const callers = rangeResponse(table, absHS, board.length === 5 ? 'river' : board.length === 4 ? 'turn' : 'flop', callAmt / (pot + best.add + callAmt), false,
+      villain.foldOverride, perceived, board, MODEL.learnFolds ? villain.foldBias : 0).cont;
+    if (!callers.length) return { bluff: true, prob: 1, why: 'nothing calls' };
+    const eqVsAll = E.rangeEquityVs(ours, theirs, board, { samples: 24 });
+    const eqVsCall = E.rangeEquityVs(ours, callers, board, { samples: 24 });
+    const callW = callers.reduce((t, c) => t + c[2], 0);
+    const byCard = new Float64Array(52);
+    for (const c of callers) { byCard[c[0]] += c[2]; byCard[c[1]] += c[2]; }
+    let valueW = 0;
+    const cands = [];
+    ours.forEach((c, i) => {
+      const w = c.length > 2 ? c[2] : 1;
+      if (eqVsCall[i] > 0.5) { valueW += w; return; }
+      if (eqVsAll[i] >= B.sdvMax) return;  // real showdown value: check it down
+      const block = (byCard[c[0]] + byCard[c[1]]) / callW;  // share of their calls we block
+      cands.push({ c, w, score: block * B.blockerWeight - eqVsAll[i] });
+    });
+    cands.sort((a, b) => b.score - a.score);
+    const need = valueW * size / (1 + size);
+    const mine = cands.findIndex(x => (x.c[0] === hero[0] && x.c[1] === hero[1]) || (x.c[0] === hero[1] && x.c[1] === hero[0]));
+    const edge = (best.ev - passive.ev) / Math.max(pot, 1e-9);
+    if (mine < 0) {
+      // our hand has showdown value (or is a value hand by this measure): bluff only on a clear exploit edge
+      return { bluff: edge >= B.exploitEdge, prob: edge >= B.exploitEdge ? 1 : 0, why: 'has showdown value', valueW, need };
+    }
+    let before = 0; for (let k = 0; k < mine; k++) before += cands[k].w;
+    const w = cands[mine].w;
+    const prob = clamp((need - before) / w, 0, 1);
+    const exploit = edge >= B.exploitEdge;
+    const bluff = exploit || (prob > 0 && (prob >= 1 || E.random() < prob));
+    return { bluff, prob: exploit ? 1 : +prob.toFixed(3), rank: mine + 1, of: cands.length, valueW: +valueW.toFixed(1), need: +need.toFixed(1), exploit,
+      why: exploit ? 'big EV edge vs this player: bluff beyond the balanced share' : prob >= 1 ? 'among the best bluff candidates' : prob > 0 ? 'on the edge: mixed' : 'better bluff candidates exist; check' };
+  }
+
   // Per-decision cache: their equity vs our perceived range doesn't change with our bet size.
   let EQV = new Map();
   function equityVsPerceived(table, perceived, board) {
@@ -741,6 +808,12 @@
       const alt = options.filter(o => o.action === 'CALL' || o.action === 'FOLD' || (o.action === 'ALL-IN' && o.eqC == null)).sort((a, b) => b.ev - a.ev)[0];
       if (alt) best = alt;
     }
+    // Bluff selection over our whole perceived range: which of our hands should bluff, and how often.
+    let bluffPick = null;
+    if (MODEL.bluffSelect.on && !facing && best.action === 'BET' && best.eqC != null && best.eqC < 0.35 && ctx.heroRange && villains.length === 1 && passive) {
+      bluffPick = selectBluff({ ctx, best, hero, board, pot, table: tables[0], villain: villains[0], passive });
+      if (bluffPick && !bluffPick.bluff) best = passive;
+    }
     // Model uncertainty: an aggressive line must beat the passive one by a margin that grows the less we
     // know about the opponent (few hands seen → our range and fold estimates are mostly population
     // guesses). Raises facing a bet pay the full margin; bets that are mostly bluffs pay half.
@@ -789,6 +862,7 @@
     else if (ctx.format === 'tournament' && !icmOn(ctx)) reason += ' (tournament without payouts: chip EV only)';
 
     const explain = explainDecision({ ctx, best, eq, feat, heroMade, villains, tables, street, pot, board, hero, real });
+    if (bluffPick) explain.bluffSelection = bluffPick;
     return {
       explain,
       ...(best.folds ? { villainFolds: Object.fromEntries(villains.map((v, i) => [v.name, best.folds[i]])) } : {}),
