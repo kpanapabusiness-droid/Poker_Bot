@@ -32,29 +32,58 @@ def _tesserocr():
         import tesserocr
     except ImportError:
         return None
-    return tesserocr if isinstance(getattr(tesserocr, '__version__', None), str) else None
+    # the Windows wheel has no __version__, so check it's a real module on disk (the simulator's stub isn't)
+    return tesserocr if getattr(tesserocr, '__file__', None) and hasattr(tesserocr, 'PyTessBaseAPI') else None
 
-_tess = None
+_apis = {}
+
+
+def _api(psm_name, whitelist):
+    """A tesserocr reader (cached), trying dickreuter's tessdata then Tesseract's own; None → use the CLI."""
+    key = (psm_name, whitelist)
+    if key in _apis:
+        return _apis[key]
+    api = None
+    tesserocr = _tesserocr()
+    if tesserocr is not None:
+        paths = []
+        try:
+            from poker.tools.screen_operations import tesserpath
+            paths.append(tesserpath)
+        except Exception:
+            pass
+        paths.append(None)
+        for path in paths:
+            try:
+                kw = {'path': path} if path else {}
+                api = tesserocr.PyTessBaseAPI(psm=getattr(tesserocr.PSM, psm_name), **kw)
+                api.SetVariable('tessedit_char_whitelist', whitelist)
+                break
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f'tesserocr with tessdata {path!r} failed: {e}')
+                api = None
+    _apis[key] = api
+    return api
+
+
+def _tesseract_exe():
+    exe = shutil.which('tesseract')
+    if exe:
+        return exe
+    for p in (r'C:\Program Files\Tesseract-OCR\tesseract.exe', r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe'):
+        if os.path.exists(p):
+            return p
+    return None
 
 
 def _ocr(img):
     """Single-word OCR of a rank glyph, whitelisted. tesserocr if available (dickreuter has it), else the CLI."""
-    global _tess
-    tesserocr = _tesserocr()
-    if tesserocr is not None:
-        if _tess is None:
-            path = None
-            try:
-                from poker.tools.screen_operations import tesserpath
-                path = tesserpath
-            except Exception:
-                pass
-            kw = {'path': path} if path else {}
-            _tess = tesserocr.PyTessBaseAPI(psm=tesserocr.PSM.SINGLE_WORD, **kw)
-            _tess.SetVariable('tessedit_char_whitelist', 'AKQJ1098765432')
-        _tess.SetImage(img)
-        return _tess.GetUTF8Text().strip()
-    exe = shutil.which('tesseract')
+    api = _api('SINGLE_WORD', 'AKQJ1098765432')
+    if api is not None:
+        api.SetImage(img)
+        return api.GetUTF8Text().strip()
+    exe = _tesseract_exe()
     if not exe:
         return ''
     with tempfile.TemporaryDirectory() as d:
@@ -222,7 +251,7 @@ def dump_failed(img, box, name, folder, every=5.0, keep=30):
         img.convert('RGB').crop((x1, y1, x2, y2)).save(os.path.join(folder, f'{name}_{stamp}.png'))
         img.convert('RGB').save(os.path.join(folder, f'{name}_{stamp}_table.png'))
         logging.getLogger(__name__).info(f'card reader {name}: {last_notes or "no white card faces found"} '
-                                         f'(image {img.size}, box {box}) → saved {name}_{stamp}.png')
+                                         f'(image {img.size}, box {box}) -> saved {name}_{stamp}.png')
         files = sorted(glob.glob(os.path.join(folder, f'{name}_*.png')))
         for f in files[:-keep]:
             os.remove(f)
@@ -245,22 +274,11 @@ _tess_text = None
 
 
 def _ocr_text(img):
-    global _tess_text
-    tesserocr = _tesserocr()
-    if tesserocr is not None:
-        if _tess_text is None:
-            path = None
-            try:
-                from poker.tools.screen_operations import tesserpath
-                path = tesserpath
-            except Exception:
-                pass
-            kw = {'path': path} if path else {}
-            _tess_text = tesserocr.PyTessBaseAPI(psm=tesserocr.PSM.SINGLE_LINE, **kw)
-            _tess_text.SetVariable('tessedit_char_whitelist', '$0123456789,.KMBPOT: ')
-        _tess_text.SetImage(img)
-        return _tess_text.GetUTF8Text().strip()
-    exe = shutil.which('tesseract')
+    api = _api('SINGLE_LINE', '$0123456789,.KMBPOT: ')
+    if api is not None:
+        api.SetImage(img)
+        return api.GetUTF8Text().strip()
+    exe = _tesseract_exe()
     if not exe:
         return ''
     with tempfile.TemporaryDirectory() as d:
@@ -324,22 +342,12 @@ def read_text(img, box):
         g = ImageOps.invert(g)
     big = ImageOps.expand(g.resize((g.width * 4, g.height * 4), Image.LANCZOS), 20, fill=255)
     allowed = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-'
-    tesserocr = _tesserocr()
-    if tesserocr is not None:
-        if _tess_name is None:
-            path = None
-            try:
-                from poker.tools.screen_operations import tesserpath
-                path = tesserpath
-            except Exception:
-                pass
-            kw = {'path': path} if path else {}
-            _tess_name = tesserocr.PyTessBaseAPI(psm=tesserocr.PSM.SINGLE_LINE, **kw)
-            _tess_name.SetVariable('tessedit_char_whitelist', allowed)
-        _tess_name.SetImage(big)
-        txt = _tess_name.GetUTF8Text()
+    api = _api('SINGLE_LINE', allowed)
+    if api is not None:
+        api.SetImage(big)
+        txt = api.GetUTF8Text()
     else:
-        exe = shutil.which('tesseract')
+        exe = _tesseract_exe()
         if not exe:
             return ''
         with tempfile.TemporaryDirectory() as d:
