@@ -4,10 +4,11 @@ mouse positions (½ pot, pot, max, +), cut from the bot's own per-decision scree
 (log/screenshots/*.png, which are already cropped to the "Poker" heading), then check every button
 picture against every screenshot the same way the bot does.
 
-    python add_torn_buttons.py CALL_SHOT.png BET_SHOT.png ALLIN_SHOT.png IMBACK_SHOT.png [more to check ...]
+    python add_torn_buttons.py CALL BET ALLIN IMBACK PREACTION [more screenshots to check ...]
 
 CALL_SHOT: a screenshot showing "RAISE TO / CALL / FOLD"; BET_SHOT: one showing "BET / CHECK / FOLD";
-ALLIN_SHOT: one showing the two-button "ALL-IN / FOLD" bar; IMBACK_SHOT: "LEAVE / I'M BACK" after Sit Out
+ALLIN_SHOT: one showing the two-button "ALL-IN / FOLD" bar; IMBACK_SHOT: "LEAVE / I'M BACK" after Sit Out;
+PREACTION: before your turn ("CALL ANY / CALL $x / FOLD")
 (full screenshots are cropped automatically).
 Positions are relative to the heading, like everything in torn_9max.json.
 """
@@ -29,6 +30,7 @@ CUT = {                                    # just the word, cut from the screens
     'bet_button': ('bet', (186, 658, 206, 673)),     # "BET" of "BET $1K"
     'all_in_call_button': ('allin', (234, 658, 272, 673)),  # "ALL-IN" of the two-button ALL-IN / FOLD bar
     'im_back': ('imback', (509, 657, 559, 673)),     # "I'M BACK" (LEAVE / I'M BACK, after Sit Out)
+    'preaction_button': ('preaction', (182, 657, 232, 673)),  # "CALL ANY": pre-action buttons (not your turn yet)
 }
 MOUSE = {                                  # where to click (only used with "Act automatically")
     'mouse_half_pot': (301, 610, 316, 625),  # "1/2" preset
@@ -42,7 +44,8 @@ MOUSE = {                                  # where to click (only used with "Act
     'mouse_imback': (480, 652, 590, 680),    # I'M BACK (right half of the two-button bar)     # ALL-IN when calling means all-in (left of the bar in both layouts)
 }
 THRESHOLD = 0.03                           # present buttons score <= 0.015, absent ones >= 0.045
-BUTTONS = ('fold_button', 'check_button', 'call_button', 'raise_button', 'bet_button', 'all_in_call_button', 'im_back')
+BUTTONS = ('fold_button', 'check_button', 'call_button', 'raise_button', 'bet_button', 'all_in_call_button', 'im_back',
+           'preaction_button')
 
 
 def box(b):
@@ -80,13 +83,15 @@ def main():
     ap.add_argument('bet_shot')
     ap.add_argument('allin_shot', help='full screenshot showing ALL-IN / FOLD (cropped here from the heading)')
     ap.add_argument('imback_shot', help="screenshot showing LEAVE / I'M BACK (after clicking Sit Out)")
+    ap.add_argument('preaction_shot', help='screenshot before your turn: CALL ANY / CALL $x / FOLD')
     ap.add_argument('check', nargs='*')
     ap.add_argument('--table', default=os.path.join(HERE, 'torn_9max.json'))
     o = ap.parse_args()
     t = json.load(open(o.table))
     shots = {'call': Image.open(o.call_shot).convert('RGB'), 'bet': Image.open(o.bet_shot).convert('RGB'),
              'allin': crop_to_heading(t, Image.open(o.allin_shot).convert('RGB')),
-             'imback': crop_to_heading(t, Image.open(o.imback_shot).convert('RGB'))}
+             'imback': crop_to_heading(t, Image.open(o.imback_shot).convert('RGB')),
+             'preaction': crop_to_heading(t, Image.open(o.preaction_shot).convert('RGB'))}
     for key, (which, b) in CUT.items():
         t[key] = png_b64(shots[which].crop(b))
     for key, b in MOUSE.items():
@@ -99,8 +104,8 @@ def main():
     t['lost_everything_search_area'] = box(BAR)
     json.dump(t, open(o.table, 'w'))
     print(f'Updated {o.table}\n')
-    print(f"{'screenshot':<28}" + ''.join(f'{k.replace("_call_button", "").replace("_button", ""):>8}' for k in BUTTONS))
-    for path in [o.call_shot, o.bet_shot, o.allin_shot, o.imback_shot] + o.check:
+    print(f"{'screenshot':<28}" + ''.join(f'{k.replace("_call_button", "").replace("_button", "").replace("preaction", "pre"):>8}' for k in BUTTONS))
+    for path in [o.call_shot, o.bet_shot, o.allin_shot, o.imback_shot, o.preaction_shot] + o.check:
         im = crop_to_heading(t, Image.open(path).convert('RGB'))
         print(f'{os.path.basename(path):<28}' + ''.join(f"{'yes' if found(t, im, k) else '-':>8}" for k in BUTTONS))
 

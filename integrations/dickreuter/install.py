@@ -331,6 +331,24 @@ def main(repo):
           "                log.warning('Moving mouse away failed')\n"
           "        return\n",
           "poker-coach: humanize after-action")
+    # After clicking: check it landed (still our turn → try once more). Advice-only: don't stop for
+    # Enter after each tip, wait until you've acted. Not our turn: maybe tick a pre-action Fold.
+    patch(main_py,
+          "                    mouse.mouse_action(mouse_target, table.tlc, action_options)\n"
+          "                else:\n"
+          '                    input("=== Press Enter to continue ===")\n',
+          "                    mouse.mouse_action(mouse_target, table.tlc, action_options)\n"
+          "                    from poker.decisionmaker.coach_decision import check_action_landed  # poker-coach: reliability\n"
+          "                    check_action_landed(table, mouse, mouse_target, action_options)\n"
+          "                else:\n"
+          "                    from poker.decisionmaker.coach_decision import wait_turn_over\n"
+          "                    wait_turn_over(table)\n",
+          "poker-coach: reliability")
+    patch(main_py,
+          "                        table.check_for_button() and \\\n",
+          "                        (table.check_for_button() or __import__('poker.decisionmaker.coach_decision', fromlist=['preaction'])"
+          ".preaction(table, history, mouse)) and \\\n",
+          "fromlist=['preaction']")
     # Exact bet sizes: click the amount box, type the coach's (rounded) size, then press Raise/Bet.
     # Used when the table maps mouse_bet_amount; otherwise the coach picks the nearest preset.
     patch(mm,

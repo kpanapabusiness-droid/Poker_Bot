@@ -460,3 +460,119 @@ class CoachDecision(Decision):
                                  'amount': _num(getattr(t, 'minBet', 0))})
             except Exception:
                 pass
+
+
+# ── Acting reliably, and pre-action buttons ──
+
+def _acting(table):
+    try:
+        return bool(table.gui_signals.ui.auto_act.isChecked())
+    except Exception:
+        return False
+
+
+def still_my_turn(table):
+    """Take a fresh screenshot: is it (still) our turn?"""
+    try:
+        table.take_screenshot2()
+        if table.crop_from_top_left_corner() is None:
+            return False
+        td = getattr(table, 'table_dict', {}) or {}
+        if 'preaction_button' in td:  # pre-action buttons showing = we've acted, it's someone else's turn
+            from poker.tools.screen_operations import is_template_in_search_area
+            if is_template_in_search_area(td, table.screenshot, 'preaction_button', 'buttons_search_area'):
+                return False
+        return bool(table.is_my_turn())
+    except Exception as e:
+        log.debug("turn check failed: %s", e)
+        return False
+
+
+def check_action_landed(table, mouse, target, options, retries=1):
+    """After clicking: if it's still our turn a moment later the click didn't land (lag, a popup over
+    the button) - try once more, then leave it to you."""
+    import random
+    import time
+    for attempt in range(retries + 1):
+        time.sleep(random.uniform(1.5, 2.5))
+        if not still_my_turn(table):
+            return True
+        if attempt < retries:
+            log.warning("Still our turn after clicking %s - trying again", target)
+            mouse.mouse_action(target, table.tlc, options)
+    log.error("Clicked %s twice and it's still our turn - please act yourself", target)
+    return False
+
+
+def wait_turn_over(table, timeout=90):
+    """Advice-only mode: instead of stopping for Enter, wait until you've acted (or the timer ran out)."""
+    import time
+    end = time.time() + timeout
+    while time.time() < end:
+        time.sleep(0.7)
+        if not still_my_turn(table):
+            return
+    log.info("Still your turn after %ss - carrying on", timeout)
+
+
+def chen(cards):
+    """Bill Chen's preflop score for two cards like ['KD', '9S'] (higher = better; 12+ premium, <4 junk)."""
+    vals = {'A': 10, 'K': 8, 'Q': 7, 'J': 6, 'T': 5}
+    order = '23456789TJQKA'
+    r1, r2 = sorted((c[0].upper() for c in cards), key=order.index, reverse=True)
+    s1, s2 = (c[1].upper() for c in cards)
+    score = vals.get(r1, order.index(r1) + 2 if r1 not in vals else 0) / (1 if r1 in vals else 2)
+    if r1 == r2:
+        return max(5, score * 2)
+    if s1 == s2:
+        score += 2
+    gap = order.index(r1) - order.index(r2) - 1
+    score -= {0: 0, 1: 1, 2: 2, 3: 4}.get(gap, 5)
+    if gap <= 1 and order.index(r1) < order.index('Q'):
+        score += 1
+    return score
+
+
+PREACTION = {'chance': 0.3, 'max_chen': 2}  # tick the pre-action Fold on ~30% of junk hands (72o, Q5o, J3o)
+_preaction_done = {}
+
+
+def preaction(table, history, mouse):
+    """Not our turn yet. Now and then, with a junk hand preflop, tick the site's pre-action Fold
+    (or Check/Fold) the way people do, so the fold happens the moment the action reaches us.
+    Decided once per hand. Always returns False (the bot still has nothing to do this loop)."""
+    import random
+    import time
+    try:
+        td = getattr(table, 'table_dict', {}) or {}
+        game = getattr(history, 'GameID', None)
+        if game in _preaction_done or not _acting(table) or 'preaction_button' not in td:
+            return False
+        cards = [str(c) for c in (getattr(table, 'mycards', None) or [])]
+        if len(cards) != 2 or getattr(table, 'cardsOnTable', None):
+            return False
+        from poker.tools.screen_operations import is_template_in_search_area
+        if not is_template_in_search_area(td, table.screenshot, 'preaction_button', 'buttons_search_area'):
+            return False
+        _preaction_done[game] = True
+        if len(_preaction_done) > 50:
+            for k in list(_preaction_done)[:-10]:
+                _preaction_done.pop(k, None)
+        if chen(cards) > PREACTION['max_chen'] or random.random() > PREACTION['chance']:
+            return False
+        # not on the button (might steal) or in the blinds (might check for free)
+        if int(_num(getattr(table, 'dealer_position', -1), -1)) == 0:
+            return False
+        a = td.get('player_pot_area', {}).get('0')
+        if a:
+            from poker.scraper.card_reader import read_amount
+            if read_amount(table.screenshot, (a['x1'], a['y1'], a['x2'], a['y2'])):
+                return False
+        time.sleep(random.uniform(0.4, 2.5))  # look at the cards first
+        log.info("Pre-action: ticking Fold with %s", ' '.join(cards))
+        coo = td['mouse_fold']
+        tlx, tly = table.tlc
+        mouse.take_action(coo['x1'] + tlx, coo['y1'] + tly, coo['x2'] + tlx, coo['y2'] + tly)
+    except Exception as e:
+        log.warning("pre-action skipped: %s", e)
+    return False
