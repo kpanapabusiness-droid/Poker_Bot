@@ -356,7 +356,7 @@ def log_decision(state, d, button, game_id):
             'equity': round(d['equity'], 4) if isinstance(d.get('equity'), (int, float)) else '',
             'ev': best.get('ev', ''), 'button': button, 'reason': d.get('reason'),
         }
-        with open(path, 'a', newline='', encoding='utf-8') as f:
+        with open(path, 'a', newline='', encoding='utf-8-sig' if not os.path.exists(path) else 'utf-8') as f:
             w = csv.DictWriter(f, fieldnames=DECISION_FIELDS)
             if new:
                 w.writeheader()
