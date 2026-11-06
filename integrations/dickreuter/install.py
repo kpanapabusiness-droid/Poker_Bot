@@ -102,6 +102,9 @@ def main(repo):
         open(so, 'w', encoding='utf-8').write(src)
         print(f"  patched: {os.path.relpath(so)} (thousands commas)")
     mm = os.path.join(pkg, 'tools', 'mouse_mover.py')
+    # an earlier version added a Torn-only auto-act block; start mouse_mover from dickreuter's original again
+    if os.path.exists(mm + '.orig') and '_acting_allowed' in open(mm, encoding='utf-8').read():
+        shutil.copy(mm + '.orig', mm)
     patch(mm,
           "log = logging.getLogger(__name__)\n",
           "log = logging.getLogger(__name__)\n\n\n"
@@ -278,8 +281,6 @@ def main(repo):
           "        y2 = int(np.round(np.random.uniform(10, 200, 1), 0)[0])\n\n"
           "        time.sleep(np.random.uniform(0.5, 1.2, 1)[0])\n",
           "    def move_mouse_away_from_buttons(self):\n"
-          "        if not _acting_allowed(self.table_dict):  # poker-coach: never on Torn\n"
-          "            return\n"
           "        time.sleep(np.random.uniform(0.3, 0.8, 1)[0])\n"
           "        if not self.vbox_mode:  # poker-coach: smooth mouse (drift up to 250px off the buttons)\n"
           "            (x1, y1) = self.mouse.position()\n"
@@ -293,25 +294,6 @@ def main(repo):
           "            log.warning('Moving mouse away failed')\n"
           "        return\n",
           "drift up to 250px off the buttons")
-    # Torn's rules don't allow tools that play for you: the bot only advises there, even if
-    # "Act automatically" is ticked by mistake.
-    patch(mm,
-          "def _screen_origin():  # poker-coach: all monitors\n",
-          "def _acting_allowed(table_dict):  # poker-coach: never on Torn\n"
-          "    name = str((table_dict or {}).get('table_name', '')).lower()\n"
-          "    if 'torn' in name:\n"
-          "        log.warning('Act automatically is ignored on Torn tables - the coach only advises there.')\n"
-          "        return False\n"
-          "    return True\n\n\n"
-          "def _screen_origin():  # poker-coach: all monitors\n",
-          "def _acting_allowed(table_dict):")
-    patch(mm,
-          "    def mouse_action(self, decision, topleftcorner, options=None):\n",
-          "    def mouse_action(self, decision, topleftcorner, options=None):\n"
-          "        if not _acting_allowed(self.table_dict):  # poker-coach: no auto-act on Torn\n"
-          "            return\n",
-          "poker-coach: no auto-act on Torn")
-
     # Show the coach's advice in the bot window's "Last Decision" box, not just the button name
     patch(main_py,
           '        gui_signals.signal_decision.emit(str(d.decision + " " + sheet_name))\n',
