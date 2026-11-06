@@ -323,6 +323,8 @@
       // game context: how many were dealt in, and where we sit relative to the button
       tableSize: tableSize(t), seatsFromButton: seatsFromButton(0, t), format: t.format || 'cash',
       heroRange: board.length >= 3 ? heroPerceived(t, actions, role) : null,
+      ...(t.payouts ? { payouts: t.payouts } : {}),
+      ...(t.stacksBehind ? { stacksBehind: t.stacksBehind } : {}),
     };
     let d = S.decide(ctx);
     const solved = (opts.solver !== false) ? riverSolve(t, ctx, actions, role, villains, opts, d) : null;
@@ -452,6 +454,7 @@
     function decide(t) {
       if (t.gameId != null && hand && String(hand.gameId) !== String(t.gameId)) finish(t.heroStack);
       t = { ...t, players: (t.players || []).map(p => ({ ...p, name: canonical(cleanName(p.name)) })) };
+      if (t.stacksBehind) t.stacksBehind = Object.fromEntries(Object.entries(t.stacksBehind).map(([k, v]) => [k === 'Hero' ? k : canonical(cleanName(k)), v]));
       const size = tableSize(t);
       const d = decideFromTable(t, n => (/^Seat\d+$/.test(n) ? null : tracker.estimate(n, { tableSize: size })), { solver });
       if (t.gameId != null) {

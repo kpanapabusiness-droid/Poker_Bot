@@ -95,6 +95,14 @@ class CoachDirect:
         h = NS(GameID=self.game, round_number=1)
         p = NS(selected_strategy={'bigBlind': v['bb']})
         state = C.table_to_state(t, h, p)
+        if getattr(self, 'tournament', None):  # tournament mode: format, payouts, everyone's chips behind
+            state['format'] = 'tournament'
+            if self.tournament.get('payouts'):
+                state['payouts'] = self.tournament['payouts']
+                sb = {'Hero': v['stacks'][0]}
+                for k, nm in v['names'].items():
+                    sb[nm] = v['stacks'][k]
+                state['stacksBehind'] = sb
         dump = os.environ.get('POKER_COACH_DUMP')
         if dump and street0 == 'river' and bettor is not None:
             state['debugRanges'] = True

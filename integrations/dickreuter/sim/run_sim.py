@@ -299,6 +299,68 @@ def _agg_outcomes(agg, rec, pos):
     return ';'.join(out)
 
 
+PAYOUTS = {2: [1.0], 3: [1.0], 4: [0.65, 0.35], 5: [0.65, 0.35], 6: [0.65, 0.35], 7: [0.5, 0.3, 0.2], 8: [0.5, 0.3, 0.2], 9: [0.5, 0.3, 0.2]}
+
+
+def run_tournaments(count, lineup, seed, seats=6, start_bb=50, blind_every=10, blind_mult=1.5, icm=True, chunk=(0, None)):
+    """Sit & Go simulation: stacks carry over, blinds rise every `blind_every` hands, busted players leave
+    (the table shrinks, positions follow), last one standing wins. Returns the coach's prize share per
+    tournament (fair share = 1 / seats). icm=False gives the coach the format but no payouts (chip EV)."""
+    import random as _r
+    kinds = (lineup * seats)[:seats]
+    tdir = tempfile.mkdtemp()
+    agents = [make(k, i, '.', {}, tdir) for i, k in enumerate(kinds)]
+    names = [f'{k}{i}' for i, k in enumerate(kinds)]
+    pay = PAYOUTS[seats]
+    os.environ.setdefault('POKER_COACH_SEED', str(seed))
+    out = []
+    lo, hi = chunk[0], chunk[1] if chunk[1] is not None else count
+    for tno in range(lo, hi):
+        rng = _r.Random(f'{seed}-t{tno}')
+        order = list(range(seats)); rng.shuffle(order)  # random seating each tournament
+        alive = order[:]
+        chips = {j: 2.0 * start_bb for j in alive}
+        bb, hand_no, button, places = 2.0, 0, 0, []
+        for j in alive:
+            a = agents[j]
+            if hasattr(a, 'tournament'):
+                a.tournament = {'payouts': pay} if icm else {}
+        while len(alive) > 1 and hand_no < 400:
+            if hand_no and hand_no % blind_every == 0:
+                bb *= blind_mult
+            deck = holdem.DECK[:]; _r.Random(f'{seed}-t{tno}-h{hand_no}').shuffle(deck)
+            for j in alive:
+                if hasattr(agents[j], 'reseed'):
+                    agents[j].reseed(f'{seed}-{tno}-{hand_no}')
+            table = holdem.Table([agents[j] for j in alive], bb=bb, start_stack=0, names=[names[j] for j in alive])
+            res, rec = table.play(deck, button % len(alive), stacks=[chips[j] for j in alive])
+            for pos, j in enumerate(alive):
+                chips[j] += res[pos]
+                if hasattr(agents[j], 'hand_over'):
+                    agents[j].hand_over(res[pos] / bb)
+            busted = [j for j in alive if chips[j] <= 1e-9]
+            busted.sort(key=lambda j: -(chips[j]))
+            for j in busted:
+                places.append(j)
+            alive = [j for j in alive if chips[j] > 1e-9]
+            button += 1; hand_no += 1
+        # finishing order: winner first, then busts in reverse order (ties by bust order)
+        finish = alive + places[::-1] if len(alive) == 1 else sorted(alive, key=lambda j: -chips[j]) + places[::-1]
+        prize = {j: (pay[k] if k < len(pay) else 0.0) for k, j in enumerate(finish)}
+        coach_j = [j for j in range(seats) if kinds[j].startswith('coach')]
+        out.append({'t': tno, 'hands': hand_no, 'prize': sum(prize[j] for j in coach_j) / len(coach_j),
+                    'place': finish.index(coach_j[0]) + 1})
+    for a in agents:
+        if hasattr(a, 'brain'):
+            a.brain.close()
+    return out
+
+
+def _tworker(args):
+    kw, chunk = args
+    return run_tournaments(chunk=chunk, **kw)
+
+
 def _worker(args):
     kw, chunk, detail = args
     kw = dict(kw, deck_range=chunk, progress=False, detail=detail, out_path=None)
@@ -365,6 +427,8 @@ def main():
     ap.add_argument('--stack', type=float, default=100, help='starting stack in big blinds (cash: topped up every hand)')
     ap.add_argument('--physical-seats', type=int, help='coach sees a table this big, the extra seats empty or sitting out')
     ap.add_argument('--workers', type=int, default=1, help='parallel processes (use your CPU core count)')
+    ap.add_argument('--tournaments', type=int, help='play this many Sit & Go tournaments instead of cash decks')
+    ap.add_argument('--no-icm', action='store_true', help='tournaments: give the coach no payouts (chip EV only)')
     ap.add_argument('--luck', choices=('ev', 'actual'), default='ev',
                     help="ev: all-in hands before the river scored by equity (default); actual: by who won")
     o = ap.parse_args()
@@ -377,6 +441,26 @@ def main():
         lineup = ['coachx', 'h-' + o.lineup[3:]]
     else:
         lineup = LINEUPS.get(o.lineup, o.lineup).split(',')
+    if o.tournaments:
+        import multiprocessing as mp
+        tk = dict(count=o.tournaments, lineup=lineup, seed=o.seed, seats=o.seats, icm=not o.no_icm)
+        edges = [round(i * o.tournaments / o.workers) for i in range(o.workers + 1)]
+        if o.workers > 1:
+            with mp.get_context('spawn').Pool(o.workers) as pool:
+                parts = pool.map(_tworker, [(tk, (edges[i], edges[i + 1])) for i in range(o.workers)])
+            res = [r for part in parts for r in part]
+        else:
+            res = run_tournaments(**tk)
+        n = len(res)
+        mean = sum(r['prize'] for r in res) / n
+        sd = math.sqrt(sum((r['prize'] - mean) ** 2 for r in res) / max(1, n - 1))
+        fair = 1 / o.seats
+        print(f"coach prize share: {mean:.3f} ± {1.96 * sd / math.sqrt(n):.3f} per tournament (fair share {fair:.3f}) — "
+              f"ROI {100 * (mean / fair - 1):+.0f}%, {n} tournaments, avg {sum(r['hands'] for r in res) / n:.0f} hands, "
+              f"won {sum(r['place'] == 1 for r in res)}")
+        if o.out:
+            json.dump(res, open(o.out, 'w'))
+        return
     kw = dict(hands=o.hands, lineup=lineup, seed=o.seed, dr_dir=os.path.abspath(o.dickreuter), learn=not o.no_learn,
               detail=o.detail, out_path=o.out, seats=o.seats, rotations=o.rotations, stack=o.stack * 2.0, luck=o.luck)
     if o.workers > 1:

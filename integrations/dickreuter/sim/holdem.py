@@ -63,10 +63,11 @@ class Table:
         self.start_stack = start_stack
         self.names = names or ['P%d' % i for i in range(self.n)]
 
-    def play(self, deck, button, on_action=None):
-        """Play one hand with this deck order. Returns per-seat net result and a hand record."""
+    def play(self, deck, button, on_action=None, stacks=None):
+        """Play one hand with this deck order. Returns per-seat net result and a hand record.
+        stacks: each seat's chips (tournaments); default everyone starts with start_stack (cash)."""
         n = self.n
-        stacks = [self.start_stack] * n
+        stacks = list(stacks) if stacks is not None else [self.start_stack] * n
         hole = [[deck[2 * i], deck[2 * i + 1]] for i in range(n)]
         board_cards = deck[2 * n:2 * n + 5]
         committed = [0.0] * n  # whole hand

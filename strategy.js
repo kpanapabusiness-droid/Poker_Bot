@@ -13,9 +13,11 @@
  * Depends on poker-engine.js (global PokerEngine in the browser, require() in Node).
  */
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory(require('./poker-engine.js'));
-  else root.PokerStrategy = factory(root.PokerEngine);
-})(typeof self !== 'undefined' ? self : this, function (E) {
+  if (typeof module === 'object' && module.exports) {
+    let icm = null; try { icm = require('./icm.js'); } catch (e) { icm = null; }
+    module.exports = factory(require('./poker-engine.js'), icm);
+  } else root.PokerStrategy = factory(root.PokerEngine, root.PokerICM || null);
+})(typeof self !== 'undefined' ? self : this, function (E, ICM) {
   'use strict';
 
   // ─────────────────────────── Tunable model ───────────────────────────
@@ -113,6 +115,54 @@
   const _r = {};
   const R = txt => _r[txt] || (_r[txt] = E.parseRange(txt));
   const has = (hand, txt) => E.inRange(hand, R(txt));
+
+  // ─────────────────────────── Tournaments (ICM) ───────────────────────────
+  /**
+   * Only for ctx.format === 'tournament' with ctx.payouts (prize shares, 1st first) and ctx.stacksBehind
+   * ({ name: chips behind now }, everyone still in the tournament at this table, 'Hero' included).
+   * Without payouts, tournament decisions stay chip EV and say so.
+   */
+  const icmOn = ctx => !!(ICM && ctx.format === 'tournament' && Array.isArray(ctx.payouts) && ctx.payouts.length && ctx.stacksBehind);
+  /** Prize equity of calling an all-in: pot goes to the winner; a fold gives the pot to the villain. */
+  function icmCall(ctx, villainName, call, eq) {
+    const names = Object.keys(ctx.stacksBehind), h = names.indexOf(ctx.heroName || 'Hero'), v = names.indexOf(villainName);
+    if (h < 0 || v < 0) return null;
+    const S = names.map(n => Math.max(0, ctx.stacksBehind[n]));
+    const fold = S.slice(); fold[v] += ctx.pot;
+    const win = S.slice(); win[h] += ctx.pot;
+    const lose = S.slice(); lose[h] -= Math.min(call, S[h]); lose[v] += ctx.pot + Math.min(call, S[h]);
+    const eF = ICM.equity(fold, ctx.payouts)[h], eW = ICM.equity(win, ctx.payouts)[h], eL = ICM.equity(lose, ctx.payouts)[h];
+    const req = eW - eL > 1e-12 ? clamp((eF - eL) / (eW - eL), 0, 1) : 1;
+    return { req, fold: eF, call: eq * eW + (1 - eq) * eL };
+  }
+  /** Prize equity of an unopened shove: everyone behind may call with a range that widens as they get shorter. */
+  function icmShove(ctx, heroCards, behind) {
+    const names = Object.keys(ctx.stacksBehind), h = names.indexOf(ctx.heroName || 'Hero');
+    if (h < 0) return null;
+    const S = names.map(n => Math.max(0, ctx.stacksBehind[n]));
+    const fold = ICM.equity(S, ctx.payouts)[h];
+    let pAllFold = 1, ev = 0;
+    const calls = behind.map(v => {
+      const i = names.indexOf(v.name); if (i < 0) return null;
+      const bbs = (S[i] + (v.bet || 0)) / (ctx.bb || 1);
+      const width = clamp(0.06 + 1.2 / Math.max(1, bbs), 0.06, 0.45);  // shorter stacks call wider
+      return { i, p: width, range: E.topRange(width) };
+    }).filter(Boolean);
+    calls.forEach(c => { pAllFold *= 1 - c.p; });
+    const steal = S.slice(); steal[h] += ctx.pot;
+    ev += pAllFold * ICM.equity(steal, ctx.payouts)[h];
+    for (const c of calls) {  // first-caller approximation: this player calls, the rest fold
+      const pc = c.p * calls.filter(x => x !== c).reduce((q, x) => q * (1 - x.p), 1);
+      const eq = heroEquity(heroCards, [], [c.range], 2000);
+      const risk = Math.min(S[h], S[c.i] + 0);
+      const win = S.slice(); win[h] += ctx.pot + risk; win[c.i] -= risk;
+      const lose = S.slice(); lose[h] -= risk; lose[c.i] += ctx.pot + risk;
+      ev += pc * (eq * ICM.equity(win, ctx.payouts)[h] + (1 - eq) * ICM.equity(lose, ctx.payouts)[h]);
+    }
+    const pCovered = 1 - pAllFold - calls.reduce((t, c) => t + c.p * calls.filter(x => x !== c).reduce((q, x) => q * (1 - x.p), 1), 0);
+    ev += Math.max(0, pCovered) * fold * 0.6;  // two or more callers: rare; valued pessimistically
+    return { shove: ev, fold };
+  }
 
   // ─────────────────────────── Helpers ───────────────────────────
   const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
@@ -307,6 +357,26 @@
     const raiseTo = mult => roundTo(Math.min(mult * bb, ctx.heroStack + ctx.heroBet), bb);
 
     // Short stack: push or fold
+    if (effBB <= 12 && pf.raises <= 1 && icmOn(ctx)) {
+      if (pf.raises === 0) {
+        const behind = ctx.villains.filter(v => v.position !== pos);
+        const r = icmShove(ctx, hero, behind);
+        if (r) {
+          if (r.shove > r.fold) return out('ALL-IN', ctx.heroStack + ctx.heroBet, 'ICM', `${effBB.toFixed(0)}bb, tournament: shoving ${hc} is worth ${(100 * r.shove).toFixed(2)}% of the prize pool vs ${(100 * r.fold).toFixed(2)}% folding`);
+          if (pos === 'BB' && ctx.toCall === 0) return out('CHECK', 0, 'ICM', `${effBB.toFixed(0)}bb, tournament: check your option`);
+          return out('FOLD', 0, 'ICM', `${effBB.toFixed(0)}bb, tournament: shoving ${hc} costs prize equity (${(100 * r.shove).toFixed(2)}% vs ${(100 * r.fold).toFixed(2)}%)`);
+        }
+      } else {
+        const opener = ctx.villains.find(v => v.name === pf.lastRaiser);
+        if (opener) {
+          const eq = heroEquity(hero, [], [opener.combos && opener.combos.length ? opener.combos : E.topRange(0.25)], 2500);
+          const r = icmCall(ctx, opener.name, ctx.toCall, eq);
+          if (r) return eq >= r.req
+            ? out('ALL-IN', ctx.heroStack + ctx.heroBet, 'ICM', `Tournament: ${hc} has ${pct(eq)} vs their range; prize-pool maths needs ${pct(r.req)} — get it in`)
+            : out('FOLD', 0, 'ICM', `Tournament: ${hc} has ${pct(eq)}, but busting costs more than doubling gains here — needs ${pct(r.req)}`);
+        }
+      }
+    }
     if (effBB <= 12 && pf.raises <= 1) {
       if (pf.raises === 0) {
         const range = RANGES.shove[pos] || RANGES.shove.CO;
@@ -633,6 +703,16 @@
       if (margin > 0 && best.ev - passive.ev < margin * pot) best = passive;
     }
     if (best.action === 'CALL' && best.ev < 0) best = options.find(o => o.action === 'FOLD') || best;
+    // Tournament: calling a bet that puts someone all-in is a prize-pool decision, not a chip one.
+    let icmNote = null;
+    if (icmOn(ctx) && facing && villains.length === 1 && (ctx.toCall >= heroAll - 1e-9 || (villains[0].stack || 0) <= 1e-9)) {
+      const r = icmCall(ctx, villains[0].name, Math.min(ctx.toCall, heroAll), eq * real);
+      if (r) {
+        const callOpt = options.find(o => o.action === 'CALL' || o.action === 'ALL-IN') , foldOpt = options.find(o => o.action === 'FOLD');
+        best = eq * real >= r.req ? (callOpt || best) : (foldOpt || best);
+        icmNote = `tournament all-in: ${pct(eq * real)} equity vs ${pct(r.req)} needed by prize-pool maths (chip maths: ${pct(ctx.toCall / (pot + ctx.toCall))})`;
+      }
+    }
     // Out of position on the flop vs the preflop raiser: check everything but value hands to them.
     if (MODEL.noDonk && !ip && !facing && street === 'flop' && best.action === 'BET' && villainHasInitiative(ctx)) {
       const value = best.eqC != null && best.eqC >= 0.6 && (feat.topPairPlus || feat.made >= 2);
@@ -656,6 +736,8 @@
     } else if (best.action === 'FOLD') {
       tag = 'FOLD'; reason = `${pct(eq)} vs their range but you need ${pct(ctx.toCall / (pot + ctx.toCall))} — let it go`;
     }
+    if (icmNote) { tag = 'ICM'; reason = icmNote; }
+    else if (ctx.format === 'tournament' && !icmOn(ctx)) reason += ' (tournament without payouts: chip EV only)';
 
     const explain = explainDecision({ ctx, best, eq, feat, heroMade, villains, tables, street, pot, board, hero, real });
     return {
