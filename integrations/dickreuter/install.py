@@ -41,6 +41,10 @@ def main(repo):
     if not os.path.exists(os.path.join(pkg, 'decisionmaker', 'decisionmaker.py')):
         sys.exit(f"{repo} doesn't look like a dickreuter/poker checkout")
 
+    # dickreuter saves debug pictures into folders it never creates (pics/, log/pics/, log/screenshots/);
+    # a save into a missing folder crashed the bot, e.g. pics/FundsError.png after winning a hand
+    for d in ('pics', os.path.join('log', 'pics'), os.path.join('log', 'screenshots')):
+        os.makedirs(os.path.join(pkg, d), exist_ok=True)
     shutil.copy(os.path.join(HERE, 'coach_decision.py'), os.path.join(pkg, 'decisionmaker', 'coach_decision.py'))
     print("  copied: poker/decisionmaker/coach_decision.py")
     shutil.copy(os.path.join(HERE, 'card_reader.py'), os.path.join(pkg, 'scraper', 'card_reader.py'))
