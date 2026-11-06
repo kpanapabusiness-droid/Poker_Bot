@@ -122,8 +122,9 @@ def path(x1, y1, x2, y2, idle=False):
     if dist < 2:
         return [(int(x2), int(y2), 0.01)]
     if idle:
-        return _segment(x1, y1, x2, y2, max(0.3, dist / random.uniform(*S['idle_speed_px_per_s'])))
+        return _segment(x1, y1, x2, y2, min(2.0, max(0.3, dist / random.uniform(*S['idle_speed_px_per_s']))))
     duration = max(S['min_move_s'], dist / random.uniform(*S['speed_px_per_s']))
+    duration = min(duration, 1.5)  # never a long glide, whatever the distance
     if dist > 80 and random.random() < S['overshoot_chance']:
         f = 1 + random.uniform(*S['overshoot_frac'])
         ox = x1 + (x2 - x1) * f + random.uniform(-4, 4)

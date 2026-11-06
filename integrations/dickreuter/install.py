@@ -127,6 +127,14 @@ def main(repo):
           "                                              extended=extended, threshold=threshold)\n",
           "poker-coach: per-table button threshold")
 
+    # pymouse reads the cursor position as unsigned numbers, so on a monitor left of (or above) the
+    # main one, where x/y are negative, it got ~4 billion and the next glide never finished.
+    pm = os.path.join(pkg, 'pymouse', 'windows.py')
+    if os.path.exists(pm):
+        patch(pm,
+              '    _fields_ = [("x", c_ulong),\n                ("y", c_ulong)]\n',
+              '    _fields_ = [("x", c_long),  # poker-coach: signed cursor position\n                ("y", c_long)]\n',
+              "poker-coach: signed cursor position")
     mm = os.path.join(pkg, 'tools', 'mouse_mover.py')
     # mouse_mover patched by an older version of this installer: start again from dickreuter's original
     _mm_src = open(mm, encoding='utf-8').read()
