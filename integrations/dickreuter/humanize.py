@@ -39,9 +39,9 @@ SETTINGS = {
     'hold_s': (0.06, 0.14),          # mouse button held down this long per click
     'aim_box': (0.2, 0.8),           # click somewhere in the middle 60% of the button
 
-    # after acting: drift off the buttons (or sometimes stay)
-    'after_stay_chance': 0.3,
-    'after_drift_px': (60, 260),
+    # after acting: always move off the buttons (people don't rest the pointer on a button)
+    'after_stay_chance': 0.0,
+    'after_drift_px': (90, 280),
 
     # waiting between turns: occasional small idle movement (0 = never)
     'idle_moves_per_min': float(os.environ.get('POKER_COACH_IDLE_MOVES', '1.5')),  # 0 = dead still
@@ -150,12 +150,12 @@ def click_hold():
 
 
 def after_action_target(x, y):
-    """Where the mouse goes after clicking, or None to leave it where it is."""
+    """Where the mouse goes after clicking: up and off the button row, a varied distance and angle."""
     S = SETTINGS
     if random.random() < S['after_stay_chance']:
         return None
     d = random.uniform(*S['after_drift_px'])
-    a = random.uniform(-math.pi * 0.95, -math.pi * 0.05)  # mostly upwards, off the button row
+    a = random.uniform(-math.pi * 5 / 6, -math.pi / 6)  # upwards, at least half the distance: clear of the button row
     return int(x + d * math.cos(a)), int(y + d * math.sin(a))
 
 

@@ -581,6 +581,7 @@ def preaction(table, history, mouse):
         coo = td['mouse_fold']
         tlx, tly = table.tlc
         mouse.take_action(coo['x1'] + tlx, coo['y1'] + tly, coo['x2'] + tlx, coo['y2'] + tly)
+        mouse.move_mouse_away_from_buttons()  # and off the button again
     except Exception as e:
         log.warning("pre-action skipped: %s", e)
     return False

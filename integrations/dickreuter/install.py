@@ -142,7 +142,7 @@ def main(repo):
     mm = os.path.join(pkg, 'tools', 'mouse_mover.py')
     # mouse_mover patched by an older version of this installer: start again from dickreuter's original
     _mm_src = open(mm, encoding='utf-8').read()
-    if os.path.exists(mm + '.orig') and 'poker-coach' in _mm_src and 'humanize v3' not in _mm_src:
+    if os.path.exists(mm + '.orig') and 'poker-coach' in _mm_src and 'humanize v4' not in _mm_src:
         shutil.copy(mm + '.orig', mm)
     patch(mm,
           "log = logging.getLogger(__name__)\n",
@@ -277,7 +277,7 @@ def main(repo):
     # then drift off once (or stay). Between turns the mouse sits still.
     patch(mm,
           "    def mouse_mover(self, x1, y1, x2, y2):\n",
-          "    def mouse_mover(self, x1, y1, x2, y2):  # poker-coach: humanize v3\n"
+          "    def mouse_mover(self, x1, y1, x2, y2):  # poker-coach: humanize v4\n"
           "        from poker.tools import humanize\n"
           "        if self.vbox_mode:\n"
           "            for x, y, dt in humanize.path(x1, y1, x2, y2):\n"
@@ -293,7 +293,7 @@ def main(repo):
           "                    break\n"
           "        self.old_x, self.old_y = x2, y2\n\n"
           "    def _mouse_mover_jittery(self, x1, y1, x2, y2):  # dickreuter's original\n",
-          "poker-coach: humanize v3")
+          "poker-coach: humanize v4")
     patch(mm,
           "        self.mouse_mover(old_x1, old_y1, x1, y1)\n"
           "        self.mouse_clicker(x1, y1, x2 - x1, y2 - y1)",
@@ -345,8 +345,8 @@ def main(repo):
           "        from poker.tools import humanize\n"
           "        if not self.vbox_mode:\n"
           "            (x1, y1) = self.mouse.position()\n"
-          "            if humanize.observe((x1, y1)) or humanize.user_idle_for() < 3:\n"
-          "                return  # you've got the mouse: leave it be\n"
+          "            if humanize.observe((x1, y1)):\n"
+          "                return  # you've just taken the mouse: leave it be\n"
           "        else:\n"
           "            x1, y1 = self.old_x, self.old_y\n"
           "        target = humanize.after_action_target(x1, y1)\n"
