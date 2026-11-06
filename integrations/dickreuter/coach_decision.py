@@ -381,6 +381,7 @@ class CoachDecision(Decision):
             d = (getattr(t, 'coach_brain', None) or Brain.get()).ask(state)
             remember(state, d)
             self.coach = d
+            self.coach_state = state  # for humanize.think_time
             self.decision = to_button(d, state, t)
             t.currentBluff = 1 if d.get('tag') in ('BLUFF', 'SEMI-BLUFF') else 0
             log.info("Coach: %s [%s] - %s -> button %s", *(_ascii(v) for v in (d.get('text'), d.get('tag'), d.get('reason'), self.decision)))
@@ -388,6 +389,7 @@ class CoachDecision(Decision):
         except Exception as e:  # never stall the bot: use dickreuter's own logic for this one
             log.warning("Coach brain failed (%s); using dickreuter's decision", e)
             self.coach = None
+            self.coach_state = None
             super().make_decision(t, h, p, l)
             try:  # still remember the snapshot so later streets know what happened
                 remember(state, {'action': {'Fold': 'FOLD', 'Check': 'CHECK', 'Call': 'CALL'}.get(self.decision, 'RAISE'),
