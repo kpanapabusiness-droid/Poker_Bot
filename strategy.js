@@ -38,6 +38,9 @@
     // Out of position after calling preflop, don't lead into the raiser on the flop with less than a
     // value hand: check and let them c-bet (they bet most flops), then check-raise or call.
     noDonk: false,
+    // Opening ranges by table size (players dealt in): heads-up the button opens most hands, and
+    // the first seat at a full 9-handed table plays tighter than a generic early seat.
+    rfiBySize: { on: true, headsUp: 0.80, utg9: 0.10, utg8: 0.115 },
     betSizes: [0.33, 0.5, 0.75, 1.0],
     raiseMultipliers: [2.5, 3.5],
     equityIters: 3000,
@@ -72,6 +75,16 @@
   const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
   const roundTo = (x, step) => (step > 0 ? Math.max(step, Math.round(x / step) * step) : Math.round(x));
   const money = x => '$' + Math.round(x).toLocaleString();
+
+  /** The opening range for this seat, given how many players were dealt in (ctx.tableSize). */
+  function openRange(ctx, pos) {
+    const R2 = MODEL.rfiBySize, n = ctx.tableSize;
+    if (R2.on && n) {
+      if (n === 2 && pos === 'BTN') return E.topRange(R2.headsUp);
+      if (pos === 'EP' && ctx.seatsFromButton === 3 && n >= 8) return E.topRange(n === 9 ? R2.utg9 : R2.utg8);
+    }
+    return E.rfiRange(pos === 'BB' ? 'SB' : pos);
+  }
 
   /** Share of preflop equity a big blind defender keeps out of position, by hand shape ('KJo', '76s', '55'). */
   function preflopRealise(hc) {
@@ -197,7 +210,7 @@
           return out('RAISE', raiseTo(4 + pf.limpers), 'VALUE', `Raise the limpers: ${hc} is well ahead of limping hands`);
         return out('CHECK', 0, 'CHART', `Free flop in the big blind with ${hc}`);
       }
-      const rfi = E.rfiRange(pos === 'BB' ? 'SB' : pos);
+      const rfi = openRange(ctx, pos);
       if (E.inRange(hero, rfi)) {
         const size = pos === 'SB' ? 3 : 2.5 + pf.limpers; // +1bb per limper
         return out('RAISE', raiseTo(pf.limpers ? 3 + pf.limpers : size), 'VALUE',

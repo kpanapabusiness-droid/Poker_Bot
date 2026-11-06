@@ -1,0 +1,41 @@
+# Simulator baselines
+
+The coach's result against casual human-like players (`humans.py`), per table size, so a gain in one
+format can't hide a loss in another. Re-run these after any strategy change and compare on the
+same seed (the decks are identical, so compare deck by deck).
+
+```
+python run_sim.py --hands 800 --seats N --lineup humans --seed 21 --physical-seats 9 --no-learn
+```
+
+Cash game, 100bb, stacks topped up every hand. Every deck is played once from every seat. With
+`--physical-seats 9` the coach sees a 9-seat table where the spare seats are empty or sitting out
+with chips, which tests the dealt-in / position logic as well.
+
+## 6 Nov 2026 (branch dickreuter-brain)
+
+| Table | Hands | Coach bb/100 | Opponents |
+|---|---|---|---|
+| Heads-up | 10,000 | **+54.4 ± 11.5** | rec |
+| 3-handed | 2,400 | +59.3 ± 38.8 | rec, fish |
+| 4-handed | 3,200 | +81.7 ± 35.4 | rec, fish, tag |
+| 6-handed | 4,800 | +83.1 ± 37.0 | rec, fish, tag, nit, maniac |
+| 9-handed | 7,200 | +153.7 ± 44.0 | two each of rec, fish, tag, nit + maniac, station |
+
+## Changes tested (same decks, paired)
+
+| Change | Table | Result | Kept? |
+|---|---|---|---|
+| Hand-aware equity realisation (out of position) | 6-handed | −5.9 ± 27.0 | off |
+| No betting into the preflop raiser out of position | 6-handed | −19.7 ± 26.7 | off |
+| Both together | 6-handed | −22.3 ± 27.5 | off |
+| Heads-up button opens 80% (was the 47% 6-max button range) | heads-up | **+17.8 ± 13.1** | on |
+| 9-handed UTG opens 10% (was 13%) | 9-handed | −3.2 ± 43.3 (no change) | on |
+
+The out-of-position ideas lost against humans: casual players don't c-bet reliably, so checking to
+them gives free cards. They lost money against dickreuter's own bot too before, for other reasons.
+Both stay in `strategy.js` (`MODEL.realiseHand.on`, `MODEL.noDonk`) for later tuning.
+
+The human styles are guesses from what's written about low-stakes player pools. Once the tracker
+has 40+ hands on enough Torn players, `humans.calibrate_from_tracker()` turns their real numbers
+into a "torn" style.

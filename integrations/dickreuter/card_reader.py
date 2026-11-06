@@ -357,3 +357,29 @@ def read_text(img, box):
             txt = subprocess.run([exe, p, 'stdout', '--psm', '7', '-c', 'tessedit_char_whitelist=' + allowed],
                                  capture_output=True, text=True).stdout
     return ''.join(ch for ch in txt.strip() if ch in allowed)
+
+
+def seat_status(img, name_box):
+    """Is this seat in the hand? Torn fades a seat's name when the player isn't playing the hand
+    and writes why underneath: "Folded" (dealt in, then folded), "Sitting out" / "Waiting BB" (not
+    dealt in), or nothing (empty seat). The words aren't OCR-readable (faint grey), but their length
+    is: "Folded" is about 40px wide, the other two about 60px.
+
+    Returns 'active', 'folded', 'away' or 'empty'. Measured on Torn's default theme (6 Nov 2026)."""
+    x1, y1, x2, y2 = [int(v) for v in name_box]
+    x1 = max(0, x1)
+    g = np.array(img.convert('L')).astype(int)
+    name = g[y1:y2, x1:x2]
+    if name.size == 0:
+        return 'active'
+    if name.min() < 130:  # dark name text: playing this hand
+        return 'active'
+    status = g[y1 + 56:y1 + 73, x1:x1 + 100]
+    if status.size == 0:
+        return 'folded'
+    ink = (status < np.median(status) - 25).sum(0) > 0
+    cols = np.where(ink)[0]
+    width = int(cols[-1] - cols[0] + 1) if len(cols) else 0
+    if width == 0:
+        return 'empty'
+    return 'away' if width >= 50 else 'folded'

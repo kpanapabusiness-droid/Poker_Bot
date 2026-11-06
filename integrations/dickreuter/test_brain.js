@@ -87,5 +87,16 @@ check('unreadable names fall back to seat labels and are not tracked', !brain.tr
 const noName = B.nameOf({ players: [{ seat: 2, name: '#' }] }, 2);
 check('junk OCR becomes a seat label', noName === 'Seat2', noName);
 
+console.log('\nPlayers sitting out (Torn shows their chips, but they are not dealt in)');
+{
+  // 9 seats, dealer = seat 3. Seats 1 and 2 (between us and the button) sit out → we're the cutoff.
+  const ps = [1, 2, 3, 4, 5, 6, 7, 8].map(s => ({ seat: s, stack: 200, bet: 0, inHand: true, name: 'P' + s }));
+  for (const s of [1, 2]) Object.assign(ps[s - 1], { inHand: false, away: true });
+  const t = base({ nSeats: 9, dealer: 3, players: ps, heroCards: ['AS', 'KD'], board: [], pot: 3, toCall: 2 });
+  const tAll = base({ nSeats: 9, dealer: 3, players: ps.map(p => ({ ...p, away: false })), heroCards: ['AS', 'KD'], board: [], pot: 3, toCall: 2 });
+  check('with the two between us and the button sitting out, we are the cutoff', B.positionOf(0, t) === 'CO', B.positionOf(0, t));
+  check('counting them would have made it LJ', B.positionOf(0, tAll) === 'LJ', B.positionOf(0, tAll));
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

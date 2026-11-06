@@ -68,5 +68,20 @@ else:
     blank = Image.new('RGB', (200, 120), (10, 10, 10))
     check('no cards → empty list', C.read_cards(blank, (0, 0, 200, 120)) == [])
 
+print('\nSeat status (Torn fades seats not in the hand; the word underneath says why)')
+from PIL import ImageDraw
+def seat_img(name_grey, status_px):
+    im = Image.new('L', (120, 80), 205)
+    d = ImageDraw.Draw(im)
+    d.rectangle((5, 5, 60, 15), fill=name_grey)              # the name
+    if status_px:
+        d.rectangle((2, 60, 2 + status_px, 68), fill=160)    # the status word underneath
+    return im.convert('RGB')
+box = (0, 0, 108, 20)
+check('dark name → active', C.seat_status(seat_img(60, 40), box) == 'active')
+check('faded, short word ("Folded") → folded, still dealt in', C.seat_status(seat_img(160, 38), box) == 'folded')
+check('faded, long word ("Sitting out" / "Waiting BB") → away', C.seat_status(seat_img(160, 60), box) == 'away')
+check('faded, no word → empty seat', C.seat_status(seat_img(200, 0), box) == 'empty')
+
 print(f'\n{passed} passed, {failed} failed\n')
 sys.exit(1 if failed else 0)

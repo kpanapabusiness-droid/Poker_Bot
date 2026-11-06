@@ -20,7 +20,7 @@ _ids = itertools.count(1)
 
 
 class CoachDirect:
-    def __init__(self, kind, idx, tracker_file='', solver=True):
+    def __init__(self, kind, idx, tracker_file='', solver=True, physical_seats=None):
         self.kind = kind
         self.idx = idx
         self.brain = C.Brain(tracker_file=tracker_file, solver=solver)
@@ -29,10 +29,38 @@ class CoachDirect:
         self.actions = {}
         self.hand_log = []
         self.game = None
+        # Seat the hand at a bigger table with empty / sitting-out seats (like Torn), so the
+        # seat logic (who's dealt in, positions, blinds) is tested too. None = no extra seats.
+        self.physical = physical_seats
+        self.rng = __import__('random').Random(f'{kind}{idx}')
+        self.layout = None
 
     def new_hand(self):
         self.game = f'{self.kind}{self.idx}-{next(_ids)}'
         self.hand_log = []
+        self.layout = None
+
+    def _embed(self, v):
+        """Put the n players of the simulated hand into `physical` seats, the extra seats empty or
+        sitting out with chips (marked away). Fixed for the whole hand."""
+        n, P = v['n'], self.physical
+        if not P or P <= n:
+            return v, {}
+        if self.layout is None:
+            extra = sorted(self.rng.sample(range(1, P), P - n))
+            real = [s for s in range(P) if s not in extra]           # physical seats of view seats 0..n-1
+            away = {s: self.rng.random() < 0.6 for s in extra}        # sitting out with chips, else empty
+            self.layout = (real, away)
+        real, away = self.layout
+        stacks, bets = [0.0] * P, [0.0] * P
+        for k in range(n):
+            stacks[real[k]], bets[real[k]] = v['stacks'][k], v['bets'][k]
+        for s, sitting in away.items():
+            stacks[s] = 150.0 * v['bb'] if sitting else 0.0
+        w = dict(v, n=P, stacks=stacks, bets=bets, dealer=real[v['dealer']],
+                 in_hand=[real[k] for k in v['in_hand']],
+                 names={real[k]: nm for k, nm in v['names'].items()})
+        return w, {s for s in away}
 
     def act(self, v):
         import time
@@ -51,6 +79,7 @@ class CoachDirect:
         return action
 
     def _decide(self, v):
+        v, away = self._embed(v)
         n = v['n']
         t = NS(mycards=list(v['hero_cards']), cardsOnTable=list(v['board']), total_players=n,
                dealer_position=v['dealer'], totalPotValue=v['total_pot'], currentCallValue=v['to_call'],
@@ -59,7 +88,7 @@ class CoachDirect:
                table_dict={'mouse_all_in': {}, 'mouse_bet_amount': {}},
                coach_player_names=v['names'], player_funds=list(v['stacks']),
                other_players=[{'abs_position': k - 1, 'funds': v['stacks'][k], 'pot': v['bets'][k],
-                               'status': 1 if k in v['in_hand'] else 0} for k in range(1, n)])
+                               'status': 1 if k in v['in_hand'] else 0, 'away': k in away} for k in range(1, n)])
         h = NS(GameID=self.game, round_number=1)
         p = NS(selected_strategy={'bigBlind': v['bb']})
         state = C.table_to_state(t, h, p)

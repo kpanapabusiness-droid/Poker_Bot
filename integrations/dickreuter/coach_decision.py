@@ -157,13 +157,13 @@ def coach_read(t, game_id, n):
     """Tables marked "coach_reader": read names, stacks, bets and the pot ourselves (greyscale
     OCR that copes with "$1,419,983" and "$2K"), instead of dickreuter's digits-only reader."""
     try:
-        from poker.scraper.card_reader import read_amount, read_text  # inside dickreuter (install.py copies it)
+        from poker.scraper.card_reader import read_amount, read_text, seat_status  # inside dickreuter (install.py copies it)
     except ImportError:
-        from card_reader import read_amount, read_text
+        from card_reader import read_amount, read_text, seat_status
     td = t.table_dict
     img = t.screenshot
     live = set(getattr(t, 'players_in_game', None) or [])
-    out = {'names': {}, 'stacks': {}, 'bets': {}}
+    out = {'names': {}, 'stacks': {}, 'bets': {}, 'away': set()}
     for seat in range(0, n):
         b = _box(td, 'player_funds_area', seat)
         if b:
@@ -172,6 +172,13 @@ def coach_read(t, game_id, n):
                 out['stacks'][seat] = v
         b = _box(td, 'player_pot_area', seat)
         out['bets'][seat] = (read_amount(img, b) or 0.0) if b else 0.0
+        if seat and seat not in live:
+            nb = _box(td, 'player_name_area', seat)
+            try:
+                if nb and seat_status(img, nb) in ('away', 'empty'):
+                    out['away'].add(seat)
+            except Exception as e:
+                log.debug("seat status failed for seat %s: %s", seat, e)
         if seat and seat in live:
             key = (game_id, seat)
             if key not in _name_cache:
@@ -260,7 +267,7 @@ def blinds_dealer(game, board, bb, hero_bet, players, n, chip_dealer, to_call=No
     bets = {0: hero_bet}
     bets.update({pl['seat']: pl['bet'] for pl in players})
     sb = [seat for seat, b in bets.items() if b and abs(b - bb / 2) <= 0.01 * bb]
-    taken = {0} | {pl['seat'] for pl in players if pl['stack'] > 0 or pl['bet'] > 0 or pl['inHand']}
+    taken = {0} | {pl['seat'] for pl in players if (pl['stack'] > 0 and not pl.get('away')) or pl['bet'] > 0 or pl['inHand']}
     ring = sorted(x for x in taken if 0 <= x < n)
     if len(sb) == 1:
         i = ring.index(sb[0]) if sb[0] in ring else None
@@ -303,7 +310,8 @@ def table_to_state(t, h=None, p=None):
         seat = int(op.get('abs_position', 0)) + 1
         bet = cr['bets'].get(seat, 0.0) if cr else _num(op.get('pot'))
         players.append({'seat': seat, 'name': names.get(seat, ''), 'stack': stacks.get(seat, _num(op.get('funds'))),
-                        'bet': bet, 'inHand': bool(op.get('status') == 1 or op.get('status') is True)})
+                        'bet': bet, 'inHand': bool(op.get('status') == 1 or op.get('status') is True),
+                        'away': bool(cr and seat in cr['away']) or bool(op.get('away'))})
 
     if cr:
         # what we have to call = the biggest bet in front of anyone, minus ours

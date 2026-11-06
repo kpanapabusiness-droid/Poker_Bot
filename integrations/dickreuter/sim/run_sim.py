@@ -122,6 +122,15 @@ LINEUPS = {'humans': 'coachx,h-rec,h-fish,h-tag,h-nit,h-maniac',
            'humans-ns': 'coachxns,h-rec,h-fish,h-tag,h-nit,h-maniac'}
 
 
+HUMAN_STYLES = ['h-rec', 'h-fish', 'h-tag', 'h-nit', 'h-maniac', 'h-station']
+PHYSICAL_SEATS = None  # set by --physical-seats
+
+
+def human_lineup(coach, seats):
+    """The coach plus `seats - 1` casual humans, styles cycling (so 9-handed has two recs, two fish...)."""
+    return [coach] + [HUMAN_STYLES[i % len(HUMAN_STYLES)] for i in range(seats - 1)]
+
+
 def make(kind, idx, dr_dir, strategy, tracker_dir):
     if kind.startswith('h-'):
         from humans import Human
@@ -129,7 +138,7 @@ def make(kind, idx, dr_dir, strategy, tracker_dir):
     if kind in ('coachx', 'coachxns'):
         from coach_direct import CoachDirect
         return CoachDirect(kind, idx, tracker_file=os.path.join(tracker_dir, f'{kind}{idx}.json') if tracker_dir else '',
-                           solver=(kind == 'coachx'))
+                           solver=(kind == 'coachx'), physical_seats=PHYSICAL_SEATS)
     if kind in ('coach', 'coachns', 'dickreuter'):
         from dickreuter_seat import DickreuterSeat, setup_dickreuter
         setup_dickreuter(dr_dir)
@@ -206,7 +215,7 @@ def run(hands, lineup, seed, dr_dir, bb=2.0, stack=200.0, progress=True, learn=T
     agents = [make(k, i, dr_dir, strategy, tracker_dir) for i, k in enumerate(kinds)]
     names = [f'{k}{i}' for i, k in enumerate(kinds)]
     # duplicate: the second table moves everyone one seat, so each seat's cards go to the other bot type
-    rot = rotations or (seats if len(set(kinds)) == seats else 2)
+    rot = rotations or (seats if len(set(kinds)) == seats or kinds.count(kinds[0]) == 1 else 2)
     seatings = [[(i - r) % seats for i in range(seats)] for r in range(rot)]
     per_pair = {k: [] for k in set(kinds)}
     rows = []
@@ -264,8 +273,14 @@ def main():
     ap.add_argument('--seats', type=int, default=6, help='table size (2-9)')
     ap.add_argument('--rotations', type=int, help='times each deck is played, everyone moving one seat each time')
     ap.add_argument('--stack', type=float, default=100, help='starting stack in big blinds (cash: topped up every hand)')
+    ap.add_argument('--physical-seats', type=int, help='coach sees a table this big, the extra seats empty or sitting out')
     o = ap.parse_args()
-    lineup = LINEUPS.get(o.lineup, o.lineup).split(',')
+    global PHYSICAL_SEATS
+    PHYSICAL_SEATS = o.physical_seats
+    if o.lineup in ('humans', 'humans-ns'):
+        lineup = human_lineup('coachx' if o.lineup == 'humans' else 'coachxns', o.seats)
+    else:
+        lineup = LINEUPS.get(o.lineup, o.lineup).split(',')
     res = run(o.hands, lineup, o.seed, os.path.abspath(o.dickreuter), learn=not o.no_learn, detail=o.detail, out_path=o.out,
               seats=o.seats, rotations=o.rotations, stack=o.stack * 2.0)
     print()

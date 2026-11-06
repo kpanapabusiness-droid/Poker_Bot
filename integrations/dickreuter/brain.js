@@ -14,7 +14,8 @@
  * Input ("table", built by coach_decision.py from dickreuter's TableScreenBased object):
  *   { heroCards: ['AS','KD'], board: ['QH','7D','2C'], pot, toCall, heroStack, heroBet, bb,
  *     nSeats, dealer,                     // dealer: seats to hero's left (0 = hero has the button)
- *     players: [{ seat, stack, bet, inHand }],   // seat: 1..nSeats-1 = seats to hero's left
+ *     players: [{ seat, stack, bet, inHand, away? }],   // seat: 1..nSeats-1 = seats to hero's left;
+ *                                         // away: sitting out / waiting for the big blind (not dealt in)
  *     history: [{ street, bets: { seat: amount } }],  // last seen bets on earlier streets, this hand
  *     stats?: { [seat]: { vpip, pfr, threeBet, af, f2b } } }   // optional overrides for the priors
  *
@@ -82,7 +83,8 @@
   function ring(t) {
     if (t._ring) return t._ring;
     const taken = new Set([0, t.dealer]);
-    for (const p of t.players || []) if ((p.stack || 0) > 0 || (p.bet || 0) > 0 || p.inHand) taken.add(p.seat);
+    // Sitting out / waiting for the big blind (p.away, from the screen reader) isn't dealt in, even with chips.
+    for (const p of t.players || []) if (((p.stack || 0) > 0 && !p.away) || (p.bet || 0) > 0 || p.inHand) taken.add(p.seat);
     for (const h of t.history || []) {
       for (const [seat, b] of Object.entries(h.bets || {})) if (b > 0) taken.add(Number(seat));
       for (const seat of h.live || []) taken.add(Number(seat));
@@ -210,6 +212,8 @@
       hero: E.parseCards(t.heroCards), board: E.parseCards(board), pot: t.pot, toCall: t.toCall || 0,
       heroStack: t.heroStack, heroBet: t.heroBet || 0, bb: t.bb, position: positionOf(0, t),
       inPosition: order[order.length - 1] === 0, heroName: 'Hero', actions, villains,
+      // game context: how many were dealt in, and where we sit relative to the button
+      tableSize: tableSize(t), seatsFromButton: seatsFromButton(0, t), format: t.format || 'cash',
     };
     let d = S.decide(ctx);
     const solved = (opts.solver !== false) ? riverSolve(t, ctx, actions, role, villains, opts, d) : null;
@@ -249,7 +253,7 @@
     const acts = synthActions(t, d && HERO_ACTION[d.action] ? { action: d.action, amount: d.amount } : null);
     // folds between snapshots: live on an earlier street, gone by a later one
     const snaps = [...(t.history || []), { street: streetOf(t.board), live: t.players.filter(p => p.inHand).map(p => p.seat) }];
-    const seated = t.players.filter(p => cleanName(p.name).length >= 2).map(p => p.seat);
+    const seated = t.players.filter(p => cleanName(p.name).length >= 2 && (!p.away || p.inHand || (p.bet || 0) > 0)).map(p => p.seat);
     const foldsAt = {}; // street -> [seat]
     const everLive = new Set();
     snaps.forEach(s => (s.live || []).forEach(x => everLive.add(Number(x))));
