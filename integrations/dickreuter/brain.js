@@ -304,6 +304,7 @@
         // the fold rate for this street (flop/turn/river), and for facing a raise after they bet
         foldOverride: est.f2bStreet && est.f2bStreet[st] != null ? est.f2bStreet[st] : est.f2b, foldToRaise: est.foldToRaise, aggression: est.af,
         foldBias: est.foldBias ? est.foldBias[st] || 0 : 0,
+        foldTo3bet: est.foldTo3bet, threeBetHands: est.raw ? est.raw.f3bOpp || 0 : 0,
         type: est.type ? est.type.short : '?', hands: est.hands || 0, est, preflopRole: role[name(p.seat)] || 'none', ...r }, actions, E.parseCards(board), est);
     });
     return { actions, role, live, villains };

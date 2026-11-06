@@ -64,6 +64,8 @@
     // margin (share of the pot) an aggressive line must beat the passive one by: base + unknown × u,
     // u = 1 with no read (< 15 hands), 0.6, 0.3, 0.1 with 100+ hands
     uncertainty: { base: 0.04, unknown: 0.08 },
+    // preflop exploit: 3-bet bluffs by the opener's fold-to-3-bet (after seeing them face minSeen 3-bets)
+    exploit3bet: { minSeen: 6, wideAt: 0.65, noneAt: 0.35, extra: 'A2s-A3s,K9s,KTs,QTs,JTs,T9s,98s,87s,76s' },
     // How villains respond to our bets/raises (rangeFolds on): each holding continues with probability
     // rising around an absolute strength threshold that goes up with the price (need = their call /
     // the pot after calling) and when they're facing a raise. off = the older population fold curve.
@@ -417,7 +419,11 @@
       const late = ['CO', 'BTN', 'SB'].includes(oPos);
       const ip = !['SB', 'BB'].includes(pos);
       const value = has(hero, RANGES.value3bet) || (late && has(hero, RANGES.value3betVsLate));
-      const bluff = !value && has(hero, RANGES.bluff3bet) && (late || pos === 'BTN');
+      // 3-bet bluffs follow the opener's real fold-to-3-bet once we've seen them face a few: more against
+      // players who fold too much, none against players who won't.
+      const X3 = MODEL.exploit3bet, ft3 = opener && opener.threeBetHands >= X3.minSeen ? opener.foldTo3bet : null;
+      const bluffRange = ft3 == null ? RANGES.bluff3bet : ft3 >= X3.wideAt ? RANGES.bluff3bet + ',' + X3.extra : ft3 <= X3.noneAt ? null : RANGES.bluff3bet;
+      const bluff = !value && bluffRange && has(hero, bluffRange) && (late || pos === 'BTN' || (ft3 != null && ft3 >= X3.wideAt));
       const threeBetTo = raiseTo(((pf.lastRaiseTo || 3 * bb) / bb) * (ip ? 3 : 4) + pf.callers);
       if (value) return out('RAISE', threeBetTo, 'VALUE', `3-bet ${hc} for value vs the ${oPos} open`);
       if (bluff) return out('RAISE', threeBetTo, 'BLUFF', `3-bet bluff: ${hc} blocks big aces and plays OK if called`);

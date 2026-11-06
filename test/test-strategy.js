@@ -36,6 +36,8 @@ spot('76s on BTN vs CO open, 35bb (too short to pay off)', { hero: h('7s6s'), po
   let ours = E.topRange(0.31); ours = E.weightRange(ours, b.slice(0, 3), 'bet'); ours = E.weightRange(ours, b.slice(0, 4), 'bet');
   spot('Q9 trips vs a river lead after check-calling the turn (call, raising only gets called by better)', { hero: h('Qh9d'), board: b, pot: 3032220, toCall: 1516110, heroStack: 9104445, bb: 25000, position: 'BTN', street: 'river', inPosition: true, heroRange: ours, villains: [{ name: 'V', position: 'BB', stack: 4076149, bet: 1516110, combos: c }] }, 'CALL');
 }
+spot('T9s on the CO vs an opener who folds to 3-bets 80% of the time (3-bet bluff)', { hero: h('Ts9s'), position: 'CO', pot: 45, toCall: 30, actions: raiseBy('V', 30), villains: [{ name: 'V', position: 'HJ', stack: 1000, bet: 30, foldTo3bet: 0.8, threeBetHands: 20 }] }, 'RAISE', 'BLUFF');
+spot('A5s on the BTN vs an opener who never folds to 3-bets (no bluff)', { hero: h('As5s'), position: 'BTN', pot: 45, toCall: 30, actions: raiseBy('V', 30), villains: [{ name: 'V', position: 'CO', stack: 1000, bet: 30, foldTo3bet: 0.2, threeBetHands: 20 }] }, ['FOLD', 'CALL']);
 spot('J4o vs an open', { hero: h('Jd4c'), position: 'HJ', pot: 45, toCall: 30, actions: raiseBy('V', 30) }, 'FOLD');
 spot('KK facing a 3-bet', { hero: h('KsKd'), position: 'CO', pot: 140, toCall: 60, heroBet: 30, actions: [...raiseBy('Hero', 30), { type: 'raise', actor: 'V', amount: 60, to: 90 }] }, ['RAISE', 'ALL-IN'], 'VALUE');
 spot('A9o facing a 3-bet', { hero: h('Ad9c'), position: 'CO', pot: 140, toCall: 60, heroBet: 30, actions: [...raiseBy('Hero', 30), { type: 'raise', actor: 'V', amount: 60, to: 90 }] }, 'FOLD');
