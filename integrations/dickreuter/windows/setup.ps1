@@ -114,12 +114,14 @@ Step '7/7  Desktop shortcuts'
 $start = @"
 @echo off
 rem Starts the local database (keeps everything on this PC), then the bot.
-cd /d "$Base\dickreuter-poker"
+rem dickreuter opens its files (window layouts, preflop sheet, logs) relative to its poker folder
+cd /d "$Base\dickreuter-poker\poker"
+set PYTHONPATH=$Base\dickreuter-poker
 set POKER_COACH_BRAIN=$Brain
 set DICKREUTER_DIR=$Base\dickreuter-poker
 start "Poker local database" /min "$Py" "$Base\poker_bot\integrations\dickreuter\local_server.py" --dickreuter "$Base\dickreuter-poker"
 timeout /t 2 /nobreak >nul
-"$Py" -m poker.main
+"$Py" main.py
 pause
 "@
 $report = @"
