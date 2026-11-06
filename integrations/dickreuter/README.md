@@ -107,7 +107,7 @@ On Windows, the easy way is `windows/setup.bat`: it installs everything, runs th
 - `python report.py` (or **Poker Bot Report** on the desktop): hands, net result, bb/100, results by position,
   by street and by the coach's last action, the biggest losses, and `hands.csv` for Excel or SQL.
 
-Set the blinds for your game in dickreuter's strategy editor (bigBlind / smallBlind): the coach reads them from there.
+Set your game's blinds with `python set_blinds.py SMALL BIG` (or **Set Poker Blinds** on the desktop), in the same units as the chips on screen. dickreuter's strategy editor stops at a 10.00 big blind, so these are stored in the local database and override every strategy. The coach reads them from there too.
 
 ## Settings
 

@@ -78,6 +78,7 @@ class Store:
             self.db.executescript("""
                 CREATE TABLE IF NOT EXISTS tables (name TEXT PRIMARY KEY, data TEXT, nn_weights TEXT);
                 CREATE TABLE IF NOT EXISTS strategies (name TEXT PRIMARY KEY, data TEXT);
+                CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
                 CREATE TABLE IF NOT EXISTS rounds (id INTEGER PRIMARY KEY, game_id TEXT, ts TEXT, data TEXT);
                 CREATE TABLE IF NOT EXISTS games (id INTEGER PRIMARY KEY, game_id TEXT, ts TEXT, strategy TEXT,
                                                   funds_change REAL, outcome TEXT, stage TEXT, data TEXT);
@@ -92,6 +93,18 @@ class Store:
             cur = self.db.execute(sql, args)
             self.db.commit()
             return cur.fetchall()
+
+    # blinds set with set_blinds.py (applied to every strategy)
+    def blinds(self):
+        r = self.q("SELECT value FROM settings WHERE key='blinds'")
+        return json.loads(r[0][0]) if r else {}
+
+    def set_blinds(self, small, big, stack=None):
+        v = {'smallBlind': float(small), 'bigBlind': float(big), 'max_abs_fundchange': 1e15}
+        if stack:
+            v.update(initialFunds=float(stack), initialFunds2=float(stack))
+        self.q("INSERT INTO settings VALUES ('blinds', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (json.dumps(v),))
+        return v
 
     # tables
     def table(self, name):
@@ -121,7 +134,11 @@ class Api:
 
     def get_strategy(self, a):
         r = self.s.q("SELECT data FROM strategies WHERE name=?", (a.get('name', 'Default'),))
-        return [json.loads(r[0][0])] if r else []
+        if not r:
+            return []
+        st = json.loads(r[0][0])
+        st.update(self.s.blinds())  # set with set_blinds.py; wins over the editor's sliders (which top out at 10)
+        return [st]
 
     def save_strategy(self, a):
         st = json.loads(a['strategy'])

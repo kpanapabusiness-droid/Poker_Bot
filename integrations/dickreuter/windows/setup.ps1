@@ -130,10 +130,18 @@ $report = @"
 pause
 "@
 Set-Content -Path (Join-Path $Base 'bot-report.bat') -Value $report -Encoding ASCII
+$blinds = @"
+@echo off
+rem Set your game's blinds in the same units as the chips on screen (the strategy editor stops at 10)
+"$Py" "$Base\poker_bot\integrations\dickreuter\set_blinds.py"
+pause
+"@
+Set-Content -Path (Join-Path $Base 'set-blinds.bat') -Value $blinds -Encoding ASCII
 Set-Content -Path (Join-Path $Base 'start-bot.bat') -Value $start -Encoding ASCII
 $desk = [Environment]::GetFolderPath('Desktop')
 Copy-Item (Join-Path $Base 'start-bot.bat') (Join-Path $desk 'Start Poker Bot.bat') -Force
 Copy-Item (Join-Path $Base 'bot-report.bat') (Join-Path $desk 'Poker Bot Report.bat') -Force
+Copy-Item (Join-Path $Base 'set-blinds.bat') (Join-Path $desk 'Set Poker Blinds.bat') -Force
 
 Write-Host ''
 if ($problems.Count) {
