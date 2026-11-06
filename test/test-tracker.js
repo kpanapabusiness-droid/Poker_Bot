@@ -113,5 +113,16 @@ console.log('\nSituational stats count only real opportunities (7 Nov)');
   check('estimates stay probabilities after shrinkage', ['fourBet', 'foldTo3bet', 'cbet', 'foldToCbet', 'foldToRaise'].every(k => e[k] > 0 && e[k] < 1) && e.f2bStreet.river > 0, e);
 }
 
+console.log('\nLearning how far our fold predictions are off, per player (7 Nov)');
+{
+  const t4 = T.create({});
+  for (let i = 0; i < 40; i++) t4.noteFold('Sticky', 'river', 0.6, i % 5 === 0);  // we predicted 60%, they folded 20%
+  for (let i = 0; i < 3; i++) t4.noteFold('Fresh', 'river', 0.6, false);
+  const st = t4.estimate('Sticky').foldBias.river, fr = t4.estimate('Fresh').foldBias.river;
+  check('a player who folds far less than predicted gets a clear negative bias', st < -0.25, st);
+  check('three hands only move the bias a little (shrinkage)', fr > -0.15 && fr < 0, fr);
+  check('no data → no bias', t4.estimate('Nobody').foldBias.turn === 0);
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

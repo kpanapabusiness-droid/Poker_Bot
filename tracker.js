@@ -124,6 +124,19 @@
       try { save && save(db); } catch (e) {}
     }
 
+    /**
+     * After our bet: we predicted `pred` (chance this player folds); did they? Builds a per-street record
+     * of how far our fold model is off for this player, used as a correction (shrunk: ~10 observations
+     * before it counts fully, so a few hands don't swing it).
+     */
+    function noteFold(name, street, pred, folded) {
+      if (!name || pred == null || !['flop', 'turn', 'river'].includes(street)) return;
+      const s = db.players[name] = db.players[name] || emptyStats();
+      s.foldModel = s.foldModel || {};
+      const m = s.foldModel[street] = s.foldModel[street] || { n: 0, pred: 0, act: 0 };
+      m.n++; m.pred += pred; m.act += folded ? 1 : 0;
+    }
+
     /** Feed the current full log; any newly completed hands are counted once. Returns how many hands were added. */
     function ingest(log) {
       let added = 0;
@@ -187,12 +200,17 @@
         est.sizeBand = band; est.sizeHands = z.hands;
       }
       est.pfr = Math.min(est.pfr, est.vpip);
+      // how much more (+) or less (−) often they fold than our model predicted, by street (shrunk to 0)
+      const fm = s.foldModel || {};
+      est.foldBias = Object.fromEntries(['flop', 'turn', 'river'].map(st => {
+        const m = fm[st]; return [st, m && m.n ? (m.act - m.pred) / (m.n + 10) : 0];
+      }));
       est.type = classify(est);
       return est;
     }
 
     return {
-      ingest, estimate,
+      ingest, estimate, noteFold,
       players: () => Object.keys(db.players),
       exportData: () => JSON.parse(JSON.stringify(db)),
       importData: d => { if (d && d.players) { db = d; processed.clear(); (d.processed || []).forEach(x => processed.add(x)); persist(); } },

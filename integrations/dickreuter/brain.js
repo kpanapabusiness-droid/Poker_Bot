@@ -303,6 +303,7 @@
       return applyPostflop({ name: name(p.seat), position: pos, stack: p.stack, bet: p.bet || 0,
         // the fold rate for this street (flop/turn/river), and for facing a raise after they bet
         foldOverride: est.f2bStreet && est.f2bStreet[st] != null ? est.f2bStreet[st] : est.f2b, foldToRaise: est.foldToRaise, aggression: est.af,
+        foldBias: est.foldBias ? est.foldBias[st] || 0 : 0,
         type: est.type ? est.type.short : '?', hands: est.hands || 0, est, preflopRole: role[name(p.seat)] || 'none', ...r }, actions, E.parseCards(board), est);
     });
     return { actions, role, live, villains };
@@ -429,7 +430,21 @@
 
     function finish(nextHeroStack) {
       if (!hand) return 0;
-      const added = tracker.ingest([...handToLog(hand, nextHeroStack), { type: 'start', handId: '__next__' + hand.gameId }]);
+      const log = handToLog(hand, nextHeroStack);
+      // fold-model feedback: after each of our bets, did each opponent we predicted for fold?
+      for (const b of hand.bets || []) {
+        let st = 'preflop', after = false;
+        const seen = new Set();
+        for (const a of log) {
+          if (a.type === 'street') { if (after) break; st = a.street; continue; }
+          if (st !== b.street) continue;
+          if (a.actor === 'Hero' && ['bet', 'raise', 'allin'].includes(a.type)) { after = true; seen.clear(); continue; }
+          if (!after || !(a.actor in b.preds) || seen.has(a.actor)) continue;
+          seen.add(a.actor);
+          tracker.noteFold(a.actor, b.street, b.preds[a.actor], a.type === 'fold');
+        }
+      }
+      const added = tracker.ingest([...log, { type: 'start', handId: '__next__' + hand.gameId }]);
       hand = null;
       return added;
     }
@@ -439,7 +454,12 @@
       t = { ...t, players: (t.players || []).map(p => ({ ...p, name: canonical(cleanName(p.name)) })) };
       const size = tableSize(t);
       const d = decideFromTable(t, n => (/^Seat\d+$/.test(n) ? null : tracker.estimate(n, { tableSize: size })), { solver });
-      if (t.gameId != null) hand = { gameId: t.gameId, table: t, decision: d };
+      if (t.gameId != null) {
+        const bets = hand && String(hand.gameId) === String(t.gameId) ? (hand.bets || []) : [];
+        if (d.villainFolds && ['BET', 'RAISE', 'ALL-IN'].includes(d.action) && (t.board || []).length >= 3)
+          bets.push({ street: streetOf(t.board), preds: d.villainFolds });
+        hand = { gameId: t.gameId, table: t, decision: d, bets };
+      }
       return d;
     }
 

@@ -66,6 +66,8 @@
     // rising around an absolute strength threshold that goes up with the price (need = their call /
     // the pot after calling) and when they're facing a raise. off = the older population fold curve.
     rangeFolds: true,
+    // learn per opponent how far our fold predictions are off (tracker foldBias) and correct for it
+    learnFolds: true,
     // How opponents' ranges are narrowed by their own actions (brain.js applyPostflop):
     // [value threshold, call threshold] within their range by street, bluff/float weights from aggression.
     // preflop ranges for opponents: soft edge and a floor (0 = the old hard cut)
@@ -256,16 +258,18 @@
    * that falls with the price. Their tracked fold-to-bet moves the threshold.
    * Returns { fold, cont } where cont is the continuing range with weights.
    */
-  function rangeResponse(table, absHS, street, need, facingRaise, f2b, perceived, board) {
+  // bias: this opponent's learned fold bias on this street (they fold more than predicted → positive →
+  // a higher bar to continue). Shifts the threshold on the strength / equity scale.
+  function rangeResponse(table, absHS, street, need, facingRaise, f2b, perceived, board, bias) {
     const R = MODEL.response;
     if (perceived && perceived.length && R.perceivedWeight > 0) {
       // Casual players mostly look at their own hand; better players weigh what our line represents.
       // perceivedWeight blends the two (0 = own hand only, 1 = our range only).
-      const pr = perceivedResponse(table, street, need, f2b == null ? null : f2b - (facingRaise ? 0.1 : 0), perceived, board);
+      const pr = perceivedResponse(table, street, need, f2b == null ? null : f2b - (facingRaise ? 0.1 : 0), perceived, board, bias);
       // facing a raise after they bet, even casual players think about what the raise means
       const k = facingRaise ? R.perceivedWeightVsRaise : R.perceivedWeight;
       if (k >= 1) return pr;
-      const own = rangeResponse(table, absHS, street, need, facingRaise, f2b, null, board);
+      const own = rangeResponse(table, absHS, street, need, facingRaise, f2b, null, board, bias);
       const m = new Map(own.cont.map(c => [c[0] * 52 + c[1], c[2]]));
       const cont = pr.cont.map(c => [c[0], c[1], (1 - k) * (m.get(c[0] * 52 + c[1]) || 0) + k * c[2]]);
       for (const c of own.cont) if (!pr.cont.some(x => x[0] === c[0] && x[1] === c[1])) cont.push([c[0], c[1], (1 - k) * c[2]]);
@@ -274,7 +278,7 @@
     // f2b here is the stat for this situation: fold-to-bet when facing a bet, fold-to-raise when they bet
     // and face our raise (centred on its own prior, 0.5). Unknown → no shift.
     const sticky = f2b == null ? 0 : R.f2bShift * (f2b - (facingRaise ? 0.5 : 0.4));
-    const thr = R.base[street] + R.priceSlope * (need - 0.25) + (facingRaise ? R.vsRaise : 0) + sticky;
+    const thr = R.base[street] + R.priceSlope * (need - 0.25) + (facingRaise ? R.vsRaise : 0) + sticky + (bias || 0);
     const drawCall = clamp(R.drawCall - 1.5 * (need - 0.2), 0.15, 0.95);
     let tw = 0, cw = 0;
     const cont = [];
@@ -409,11 +413,11 @@
    * perceived holdings that share a card with theirs don't count (blockers). Before the river, draws
    * continue at a rate that falls with the price.
    */
-  function perceivedResponse(table, street, need, f2b, perceived, board) {
+  function perceivedResponse(table, street, need, f2b, perceived, board, bias) {
     const R = MODEL.response;
     const ours = perceived.map(c => ({ a: c[0], b: c[1], w: c.length > 2 ? c[2] : 1, s: E.evaluate([c[0], c[1], ...board]) }))
       .filter(o => !board.includes(o.a) && !board.includes(o.b));
-    const thr = need + R.callBias + R.stickiness * ((f2b ?? 0.4) - 0.4);
+    const thr = need + R.callBias + R.stickiness * ((f2b ?? 0.4) - 0.4) + (bias || 0);
     const drawCall = clamp(R.drawCall - 1.5 * (need - 0.2), 0.15, 0.95);
     let tw = 0, cw = 0;
     const cont = [];
@@ -451,7 +455,8 @@
       const need = callAmt / (pot + add + callAmt);
       // facing our raise after they bet, their own fold-to-raise is the relevant stat (not fold-to-bet)
       const facingRaise = (v.bet || 0) > 0;
-      return { callAmt, ...rangeResponse(tables[i], absHS, street, need, facingRaise, facingRaise ? v.foldToRaise : v.foldOverride, perceived, board) };
+      return { callAmt, ...rangeResponse(tables[i], absHS, street, need, facingRaise, facingRaise ? v.foldToRaise : v.foldOverride, perceived, board,
+        MODEL.learnFolds ? v.foldBias : 0) };
     });
     // MDF bound: nobody folds far more than the price justifies to a small bet
     if (MODEL.mdfCap > 0) resp.forEach(r => { const cap = MODEL.mdfCap * r.callAmt / (pot + add); if (r.fold > cap) r.fold = cap; });
@@ -655,6 +660,7 @@
     const explain = explainDecision({ ctx, best, eq, feat, heroMade, villains, tables, street, pot, board, hero, real });
     return {
       explain,
+      ...(best.folds ? { villainFolds: Object.fromEntries(villains.map((v, i) => [v.name, best.folds[i]])) } : {}),
       street, action: best.action, amount: best.action === 'CALL' || best.action === 'FOLD' || best.action === 'CHECK' ? best.amount : best.amount,
       add: best.add, sizeLabel: best.sizeLabel, tag, reason, equity: eq, eqWhenCalled: best.eqC, foldEst: best.foldEst,
       foldNeeded: best.foldNeeded, ev: best.ev, handName: heroMade, features: feat,

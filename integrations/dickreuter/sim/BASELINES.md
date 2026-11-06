@@ -145,3 +145,45 @@ Neutral against the simulated players while fixing the logic. The simulated huma
 own hand only, so they can't reward range reasoning; real opponents are somewhere in between.
 Found in the line breakdown: **turn bluffs lose in both versions** (≈ −540 to −720 bb per 9,000
 hands), and river bluff-catching calls are down. Next stage (bluff engine) targets both.
+
+## Overnight 6–7 Nov: calibration, bluff engine, profiling
+
+### Measuring what the model gets wrong
+- `fold_report.py detail.csv`: for every coach bet, the fold chance it expected vs how often everyone
+  actually folded; for every call/fold facing a bet, the equity it predicted vs how often it would
+  really have won at showdown against the bettor (the simulator knows their cards). Heads-up and
+  multiway (`-MW`) are reported separately.
+- `POKER_COACH_DUMP=file.jsonl`: dumps heads-up river folds with the full weighted range and the
+  bettor's real cards, to check where real hands fall in the modelled range (calibrated = median 50%).
+
+### What the measurements found, and the fixes
+1. River folds predicted 7–12% equity where the real figure was 34–60% → the coach was overfolding rivers.
+2. Causes, in order of size:
+   - **Opponents' checks were never recorded** (dickreuter shows chips, not checks): inferred now.
+   - **Preflop ranges had a hard edge**: hands outside "top x%" were impossible forever (7 of 14 river
+     bettors held one). Now soft ranges with a floor.
+   - **Blinds were counted as playing hands we never saw them decide** (we'd folded first): no longer
+     counted, so blind players' stats aren't dragged down.
+   - **A river all-in bet was treated like a raise**: now a bet unless it actually raises.
+   - Range thresholds re-fitted until the bettor's real hand sits at the 52nd percentile of the
+     modelled range (was the 30th).
+3. Bet fold estimates were too high on the turn (47% expected vs 29% actual for bluffs): opponent
+   response re-fitted (perceived-range weight 0.25 when calling a bet, 0.75 when facing a raise after
+   betting). Turn bluffs: expected 41%, actual 46%.
+4. The minimum-defence fold cap was removed (it stopped a weak, capped range from folding as much as
+   it should). An uncertainty margin replaced the fixed bluff margin: an aggressive line must beat the
+   passive one by 4–12% of the pot depending on how many hands we've seen of the opponent.
+
+### Old (e1d9d85, 6 Nov) vs new, same decks (seed 101, coach at a 9-seat table)
+| Candidate | 6-handed | Heads-up | 9-handed |
+|---|---|---|---|
+| c1 calibrated ranges, tracker fixes | **+39.8 ± 25.0** | −4.6 ± 20.2 | +25.9 ± 41.7 |
+| c2 + response calibration, uncertainty margin | **+51.4 ± 25.7** | −4.5 ± 19.6 | **+66.1 ± 43.4** |
+
+Heads-up variants (2,000 decks, vs old): solver on our perceived range −4.0 ± 19.1, lower river
+thresholds −2.6 ± 19.1, perceived weight 0.5 facing raises +0.2 ± 16.1 (but it re-introduces the Q9
+shove, so not taken), solver off +5.0 ± 16.2 (not significant; solver kept). Heads-up is the weak spot:
+river bluffs expect 58% folds and get 37%.
+
+Line breakdown, 6-handed, old → c1: turn bluffs −1,215 → −152 bb, flop bluffs −164 → +603 bb,
+river solver −1,088 → +296 bb.
