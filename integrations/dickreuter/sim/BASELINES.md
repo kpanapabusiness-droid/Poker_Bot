@@ -50,7 +50,27 @@ with chips, which tests the dealt-in / position logic as well.
 
 Deeper is better against weaker players (more room for their mistakes), with bigger swings.
 
-**The noise floor:** about ±20 bb/100 even at 15,000 hands, because two versions stop playing
+### Better measuring (6 Nov, later)
+
+- All-in-before-the-river hands are scored by equity (`--luck ev`, the default): each player gets
+  their share of the pot over every way the board could have come.
+- The coach's equity sampling and the humans' dice are seeded by the deck and the spot, so two
+  versions face identical decisions until their play differs.
+- `--workers N` splits the decks across CPU cores. `compare.py a.csv b.csv` compares two runs.
+
+The same coach run twice now differs by ±0.3 bb/100 (it used to be up to ±20). Two different
+versions at 1,500 decks (9,000 hands): about ±8 bb/100 at 100bb, ±4 at 40bb, ±17 at 200bb,
+roughly 3× tighter than before, so about 9× fewer hands for the same certainty.
+
+Re-tests with it (6-handed, 1,500 decks):
+
+| Change | Result | Verdict |
+|---|---|---|
+| Fold slope 0.30 → 0.15 (kept earlier at +13.4 ± 23.9) | −1.2 ± 8.0 | no real effect; the earlier gain was luck |
+| Stack-depth preflop at 40bb | −0.4 ± 3.6 | no effect at 40bb |
+| Stack-depth preflop at 200bb | +10.9 ± 17.2 | probably helps; kept |
+
+**The old noise floor (before the change above):** about ±20 bb/100 even at 15,000 hands, because two versions stop playing
 identical hands after their first different decision. Changes smaller than that can't be proven
 here. The two kept changes never lost at any table size and match standard poker theory, so they
 stay on; they aren't proven gains.

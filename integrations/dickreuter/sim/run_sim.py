@@ -123,7 +123,7 @@ LINEUPS = {'humans': 'coachx,h-rec,h-fish,h-tag,h-nit,h-maniac',
 
 
 HUMAN_STYLES = ['h-rec', 'h-fish', 'h-tag', 'h-nit', 'h-maniac', 'h-station']
-PHYSICAL_SEATS = None  # set by --physical-seats
+PHYSICAL_SEATS = int(os.environ['POKER_COACH_SIM_PHYSICAL']) if os.environ.get('POKER_COACH_SIM_PHYSICAL') else None  # --physical-seats
 
 
 def human_lineup(coach, seats):
@@ -204,7 +204,10 @@ def _save(out, path, rows, detail):
         os.replace(detail + '.tmp', detail)
 
 
-def run(hands, lineup, seed, dr_dir, bb=2.0, stack=200.0, progress=True, learn=True, detail=None, out_path=None, seats=6, rotations=None):
+def run(hands, lineup, seed, dr_dir, bb=2.0, stack=200.0, progress=True, learn=True, detail=None, out_path=None, seats=6, rotations=None,
+        deck_range=None, luck='ev'):
+    """luck='ev': all-in-before-the-river hands are scored by equity (luck removed); 'actual': by who won.
+    deck_range=(a, b): play only decks a..b-1 of the seeded sequence (for parallel workers)."""
     from local_server import DEFAULT_STRATEGY
     needs_dr = any(k in ('coach', 'coachns', 'dickreuter') for k in lineup)
     dr_dir = prepared_copy(dr_dir) if needs_dr else dr_dir
@@ -222,34 +225,89 @@ def run(hands, lineup, seed, dr_dir, bb=2.0, stack=200.0, progress=True, learn=T
     totals = {k: 0.0 for k in set(kinds)}
     played = 0
     t0 = time.time()
-    for h, deck in enumerate(holdem.decks(hands, seed)):
+    all_decks = list(holdem.decks(hands, seed))
+    lo, hi = deck_range or (0, hands)
+    os.environ.setdefault('POKER_COACH_SEED', str(seed))  # brain.js: same spot → same equity samples
+    for h in range(lo, hi):
+        deck = all_decks[h]
         button = h % seats
         pair = {k: 0.0 for k in set(kinds)}
-        for seating in seatings:
+        for r_i, seating in enumerate(seatings):
             order = [agents[j] for j in seating]
+            for j in seating:  # humans: same deck and table → same dice, whichever coach version is playing
+                if hasattr(agents[j], 'reseed'):
+                    agents[j].reseed(f'{seed}-{h}-{r_i}')
             table = holdem.Table(order, bb=bb, start_stack=stack, names=[names[j] for j in seating])
             result, rec = table.play(deck, button)
+            scored = rec['result_ev'] if luck == 'ev' else result
             for pos, j in enumerate(seating):
                 if hasattr(order[pos], 'hand_over'):
-                    order[pos].hand_over(result[pos] / bb)
-                pair[kinds[j]] += result[pos] / bb
-                totals[kinds[j]] += result[pos] / bb
+                    order[pos].hand_over(result[pos] / bb)  # tilt follows what actually happened
+                pair[kinds[j]] += scored[pos] / bb
+                totals[kinds[j]] += scored[pos] / bb
                 if detail is not None:
                     a = agents[j]
                     rows.append({'deck': h, 'table': seatings.index(seating), 'bot': kinds[j], 'seat_from_button': (pos - button) % seats,
-                                 'cards': ''.join(rec['hole'][pos]), 'result_bb': round(result[pos] / bb, 2),
+                                 'cards': ''.join(rec['hole'][pos]), 'result_bb': round(scored[pos] / bb, 3),
+                                 'actual_bb': round(result[pos] / bb, 2),
                                  'showdown': rec['showdown'], 'actions': ' '.join(getattr(a, 'hand_log', []))})
             played += 1
         for k in pair:
             per_pair[k].append(pair[k] / kinds.count(k))  # bb per player of this type, both tables
-        if (h + 1) % max(1, hands // 20) == 0:
-            _save(summarise(per_pair, agents, kinds, h + 1, played, seed, lineup, t0, rot), out_path, rows, detail)
+        if (h + 1 - lo) % max(1, (hi - lo) // 20) == 0:
+            _save(summarise(per_pair, agents, kinds, h + 1 - lo, played, seed, lineup, t0, rot), out_path, rows, detail)
             if progress:
                 el = time.time() - t0
-                print(f'  {h + 1}/{hands} decks  {el / 60:.1f} min  ' + '  '.join(
+                print(f'  {h + 1 - lo}/{hi - lo} decks  {el / 60:.1f} min  ' + '  '.join(
                     f'{k} {sum(v) / len(v) / rot * 100:+.1f}' for k, v in per_pair.items()), flush=True)
-    out = summarise(per_pair, agents, kinds, hands, played, seed, lineup, t0, rot)
+    out = summarise(per_pair, agents, kinds, hi - lo, played, seed, lineup, t0, rot)
     _save(out, out_path, rows, detail)
+    out['per_pair'] = per_pair
+    out['rot'] = rot
+    return out
+
+
+def _worker(args):
+    kw, chunk, detail = args
+    kw = dict(kw, deck_range=chunk, progress=False, detail=detail, out_path=None)
+    out = run(**kw)
+    return out['per_pair'], out['rot'], out['hands_played']
+
+
+def run_parallel(workers, **kw):
+    """Split the decks between `workers` processes (each with its own copies of the players and
+    tracker) and combine the results. Detail CSVs are merged into kw['detail']."""
+    import multiprocessing as mp
+    hands, detail = kw['hands'], kw.get('detail')
+    edges = [round(i * hands / workers) for i in range(workers + 1)]
+    parts = [(kw, (edges[i], edges[i + 1]), (f'{detail}.part{i}' if detail else None)) for i in range(workers)]
+    t0 = time.time()
+    with mp.get_context('spawn').Pool(workers) as pool:
+        results = pool.map(_worker, parts)
+    per_pair, rot, played = {}, results[0][1], 0
+    for pp, _, n in results:
+        played += n
+        for k, v in pp.items():
+            per_pair.setdefault(k, []).extend(v)
+    if detail:
+        import csv
+        rows = []
+        for _, _, d in parts:
+            with open(d, newline='') as f:
+                rows.extend(csv.DictReader(f))
+            os.remove(d)
+        with open(detail, 'w', newline='') as f:
+            w = csv.DictWriter(f, fieldnames=list(rows[0]))
+            w.writeheader()
+            w.writerows(rows)
+    out = {'decks': hands, 'hands_played': played, 'minutes': round((time.time() - t0) / 60, 1), 'bots': {}}
+    for k, v in per_pair.items():
+        mean = sum(v) / len(v)
+        sd = math.sqrt(sum((x - mean) ** 2 for x in v) / max(1, len(v) - 1))
+        out['bots'][k] = {'bb_per_100': round(mean / rot * 100, 1), 'ci95': round(1.96 * sd / math.sqrt(len(v)) / rot * 100, 1),
+                          'decisions': 0, 'errors': 0, 'sec_per_decision': None}
+    if kw.get('out_path'):
+        json.dump(out, open(kw['out_path'], 'w'), indent=2)
     return out
 
 
@@ -274,6 +332,9 @@ def main():
     ap.add_argument('--rotations', type=int, help='times each deck is played, everyone moving one seat each time')
     ap.add_argument('--stack', type=float, default=100, help='starting stack in big blinds (cash: topped up every hand)')
     ap.add_argument('--physical-seats', type=int, help='coach sees a table this big, the extra seats empty or sitting out')
+    ap.add_argument('--workers', type=int, default=1, help='parallel processes (use your CPU core count)')
+    ap.add_argument('--luck', choices=('ev', 'actual'), default='ev',
+                    help="ev: all-in hands before the river scored by equity (default); actual: by who won")
     o = ap.parse_args()
     global PHYSICAL_SEATS
     PHYSICAL_SEATS = o.physical_seats
@@ -281,11 +342,17 @@ def main():
         lineup = human_lineup('coachx' if o.lineup == 'humans' else 'coachxns', o.seats)
     else:
         lineup = LINEUPS.get(o.lineup, o.lineup).split(',')
-    res = run(o.hands, lineup, o.seed, os.path.abspath(o.dickreuter), learn=not o.no_learn, detail=o.detail, out_path=o.out,
-              seats=o.seats, rotations=o.rotations, stack=o.stack * 2.0)
+    kw = dict(hands=o.hands, lineup=lineup, seed=o.seed, dr_dir=os.path.abspath(o.dickreuter), learn=not o.no_learn,
+              detail=o.detail, out_path=o.out, seats=o.seats, rotations=o.rotations, stack=o.stack * 2.0, luck=o.luck)
+    if o.workers > 1:
+        os.environ['POKER_COACH_SIM_PHYSICAL'] = str(o.physical_seats or '')
+        res = run_parallel(o.workers, **kw)
+    else:
+        res = run(**kw)
     print()
     for k, b in sorted(res['bots'].items(), key=lambda kv: -kv[1]['bb_per_100']):
-        print(f"{k:<11} {b['bb_per_100']:+7.1f} bb/100  ± {b['ci95']:.1f}  ({b['decisions']} decisions, {b['errors']} errors, {b['sec_per_decision']}s each)")
+        extra = f"  ({b['decisions']} decisions, {b['errors']} errors, {b['sec_per_decision']}s each)" if b.get('decisions') else ''
+        print(f"{k:<11} {b['bb_per_100']:+7.1f} bb/100  ± {b['ci95']:.1f}{extra}")
     print(f"\n{res['hands_played']} hands in {res['minutes']} min. A result is only real if it's bigger than its ± range.")
 
 

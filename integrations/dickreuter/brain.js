@@ -197,9 +197,20 @@
 
   /** Main entry: dickreuter table → strategy.js decision (plus the context, for debugging).
    *  `estimateFor(name)` gives a player's stats (the tracker's, when one is running). */
+  // Simulator only: POKER_COACH_SEED makes equity sampling depend on the spot, so two coach versions
+  // facing the same spot draw the same samples (less noise when comparing them). Off at the real table.
+  const SPOT_SEED = process.env.POKER_COACH_SEED;
+  function seedFor(t) {
+    const key = `${SPOT_SEED}|${t.heroCards}|${t.board}|${t.pot}|${t.toCall}|${t.heroStack}`;
+    let h = 2166136261;
+    for (let i = 0; i < key.length; i++) h = Math.imul(h ^ key.charCodeAt(i), 16777619);
+    return h >>> 0;
+  }
+
   function decideFromTable(t, estimateFor, opts = {}) {
     const name = seat => nameOf(t, seat);
     if (!t || !t.heroCards || t.heroCards.length !== 2) throw new Error('need two hero cards');
+    if (SPOT_SEED && E.setSeed) E.setSeed(seedFor(t));
     const board = t.board || [];
     const actions = synthActions(t);
     const role = preflopRole(actions);

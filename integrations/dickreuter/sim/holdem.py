@@ -93,6 +93,8 @@ class Table:
         put(sb_seat, self.sb)
         put(bb_seat, self.bb)
 
+        known_when_closed = None  # board cards seen when betting stopped for good (all-in before the river)
+        prev_nboard = 0
         for street, nboard in (('preflop', 0), ('flop', 3), ('turn', 4), ('river', 5)):
             board[:] = board_cards[:nboard]
             if street != 'preflop':
@@ -102,7 +104,11 @@ class Table:
                 break
             can_act = [i for i in live if not allin[i]]
             if not can_act or (len(can_act) == 1 and street_put[can_act[0]] >= max(street_put) - 1e-9):
+                if known_when_closed is None and street != 'preflop':
+                    known_when_closed = prev_nboard
+                prev_nboard = nboard
                 continue  # nobody left to bet against: just deal the cards
+            prev_nboard = nboard
             level = max(street_put)
             last_raise = self.bb
             idx = (bb_seat + 1) % n if street == 'preflop' else (button + 1) % n
@@ -152,24 +158,18 @@ class Table:
         if len(live) == 1:
             result[live[0]] += sum(committed)
             record['showdown'] = False
+            record['result_ev'] = list(result)
         else:
-            ranks = {i: hand_rank(hole[i] + board_cards) for i in live}
-            levels = sorted(set(committed[i] for i in range(n) if committed[i] > 0))
-            prev = 0.0
-            for lv in levels:  # side pots
-                pot = sum(min(c, lv) - min(c, prev) for c in committed)
-                eligible = [i for i in live if committed[i] >= lv - 1e-9]
-                if pot <= 0:
-                    prev = lv
-                    continue
-                if not eligible:  # only folded players put this much: give it back to the last live contributor
-                    eligible = live
-                best = max(ranks[i] for i in eligible)
-                winners = [i for i in eligible if ranks[i] == best]
-                for w in winners:
-                    result[w] += pot / len(winners)
-                prev = lv
+            for i, won in enumerate(_award(committed, live, {i: hand_rank(hole[i] + board_cards) for i in live})):
+                result[i] += won
             record['showdown'] = True
+            record['result_ev'] = list(result)
+            if known_when_closed is not None and known_when_closed < 5:
+                # Everyone left was all-in before the river: score each player by their share of the
+                # pot over every way the rest of the board could have come (luck-free result).
+                ev = all_in_ev(hole, board_cards[:known_when_closed], committed, live, deck)
+                record['result_ev'] = [-committed[i] + ev[i] for i in range(n)]
+                record['allin_at'] = known_when_closed
         record['result'] = result
         return result, record
 
@@ -189,6 +189,47 @@ class Table:
             'names': {k: self.names[ordered[k]] for k in range(1, n)},
             'bb': self.bb,
         }
+
+
+def _award(committed, live, ranks):
+    """Chips each seat wins at showdown (main pot and side pots), given each live seat's hand rank."""
+    won = [0.0] * len(committed)
+    levels = sorted(set(c for c in committed if c > 0))
+    prev = 0.0
+    for lv in levels:
+        pot = sum(min(c, lv) - min(c, prev) for c in committed)
+        eligible = [i for i in live if committed[i] >= lv - 1e-9]
+        if pot <= 0:
+            prev = lv
+            continue
+        if not eligible:  # only folded players put this much: give it back to the live players
+            eligible = live
+        best = max(ranks[i] for i in eligible)
+        winners = [i for i in eligible if ranks[i] == best]
+        for w in winners:
+            won[w] += pot / len(winners)
+        prev = lv
+    return won
+
+
+def all_in_ev(hole, known, committed, live, deck, samples=300):
+    """Expected chips won by each seat when the rest of the board is still to come. Exact for one or
+    two cards to come, otherwise `samples` random run-outs (seeded by the cards, so repeatable)."""
+    used = set(known) | {c for i in live for c in hole[i]}
+    rest = [c for c in DECK if c not in used]
+    need = 5 - len(known)
+    if need <= 2:
+        boards = [list(x) for x in itertools.combinations(rest, need)]
+    else:
+        r = random.Random(''.join(sorted(used)))
+        boards = [r.sample(rest, need) for _ in range(samples)]
+    total = [0.0] * len(committed)
+    for extra in boards:
+        b = list(known) + extra
+        won = _award(committed, live, {i: hand_rank(hole[i] + b) for i in live})
+        for i in range(len(total)):
+            total[i] += won[i]
+    return [t / len(boards) for t in total]
 
 
 def decks(count, seed=0):

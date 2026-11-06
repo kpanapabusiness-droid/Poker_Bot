@@ -109,6 +109,8 @@ if ($LASTEXITCODE -ne 0) { $problems += 'local database tests failed' }
 if ($LASTEXITCODE -ne 0) { $problems += 'card reader tests failed' }
 node poker_bot\integrations\dickreuter\test_brain.js *>&1 | Tee-Object -FilePath (Join-Path $LogDir 'test_brain.txt')
 if ($LASTEXITCODE -ne 0) { $problems += 'opponent-learning tests failed' }
+& $Py poker_bot\integrations\dickreuter\sim\test_sim.py *>&1 | Tee-Object -FilePath (Join-Path $LogDir 'test_sim.txt')
+if ($LASTEXITCODE -ne 0) { $problems += 'simulator tests failed' }
 node poker_bot\test\test-solver.js *>&1 | Tee-Object -FilePath (Join-Path $LogDir 'test_solver.txt')
 if ($LASTEXITCODE -ne 0) { $problems += 'solver tests failed' }
 & $Py -c "import sys; sys.path.insert(0, r'$Base\dickreuter-poker'); import poker.decisionmaker.coach_decision as c; print('coach_decision imports inside dickreuter:', c.Decision.__name__)"

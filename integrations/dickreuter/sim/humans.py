@@ -145,6 +145,7 @@ class Human:
 
     def __init__(self, kind, seed=0, jitter=0.2):
         self.kind = kind
+        self.seed = seed
         self.r = random.Random(f'{kind}-{seed}')
         base = STYLES[kind]
         j = lambda x: x * self.r.uniform(1 - jitter, 1 + jitter)
@@ -161,6 +162,11 @@ class Human:
         self.new_hand()
 
     # ── called by the simulator ──
+    def reseed(self, key):
+        """Fresh dice for this hand: the same deck and table give the same dice, so two versions of
+        the coach are compared on the same human decisions for as long as their play matches."""
+        self.r = random.Random(f'{self.kind}-{self.seed}-{key}')
+
     def new_hand(self):
         self.pf_aggressor = False
         self.acted_street = None

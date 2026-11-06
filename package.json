@@ -8,7 +8,7 @@
   },
   "scripts": {
     "test": "node test-engine.js && node test/test-adapter.js && node test/test-strategy.js && node test/test-tracker.js && node test/test-logger.js && node test/test-overlay.js && node test/test-report-ui.js && node test/test-security.js && node test/test-panel.js && node test/test-solver.js",
-    "test:dickreuter": "node integrations/dickreuter/test_brain.js && python3 integrations/dickreuter/test_coach_decision.py && python3 integrations/dickreuter/test_local_server.py",
+    "test:dickreuter": "node integrations/dickreuter/test_brain.js && python3 integrations/dickreuter/test_coach_decision.py && python3 integrations/dickreuter/test_local_server.py && python3 integrations/dickreuter/sim/test_sim.py",
     "sim": "python3 integrations/dickreuter/sim/run_sim.py"
   },
   "repository": {
