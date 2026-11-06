@@ -95,17 +95,26 @@
     let street = 'preflop', combos = villain.combos || E.allCombos(), narrowed = false;
     const history = [{ step: 'preflop', label: villain.label, combos: E.rangeSize(villain.combos) }];
     const warnings = [];
+    // pot as the hand goes, for bet sizes (chips added / pot before) and stack-to-pot
+    let pot = 0;
+    const usual = est.betSize != null ? est.betSize : null;  // this player's typical bet size, if tracked
     for (const a of actions) {
       if (a.type === 'street') { street = a.street; continue; }
+      const potBefore = pot;
+      if (a.amount > 0) pot += a.amount;
       if (street === 'preflop' || a.actor !== villain.name || !['bet', 'raise', 'allin', 'call', 'check'].includes(a.type)) continue;
       const b = board.slice(0, LEN[street]);
       if (b.length < LEN[street]) continue;
       const [v0, c0] = base[street];
       const kind = a.type === 'allin' ? (a.over ? 'raise' : 'bet') : a.type;  // an all-in into an unbet pot is a bet
+      const size = a.amount > 0 && potBefore > 0 ? a.amount / potBefore : null;
+      const spr = villain.stack != null && pot > 0 ? villain.stack / pot : null;
+      const sizing = size == null ? {} : { size, spr, ...(usual != null && kind !== 'call' ? { relSize: size / usual } : {}) };
       try {
-        combos = E.weightRange(combos, b, kind, { ...opts, valueThr: v0 + opts.valueShift, callThr: c0 + opts.callShift });
+        combos = E.weightRange(combos, b, kind, { ...opts, ...sizing, valueThr: v0 + opts.valueShift, callThr: c0 + opts.callShift });
         narrowed = true;
-        history.push({ step: `${street} ${kind}`, combos: Math.round(E.rangeSize(combos)) });
+        history.push({ step: `${street} ${kind}`, combos: Math.round(E.rangeSize(combos)),
+          ...(size != null ? { size: +size.toFixed(2), sizingRead: usual != null ? `vs their usual ${usual.toFixed(2)}` : 'population (no sizing read yet)' } : {}) });
       } catch (e) {
         warnings.push(`${villain.name}: no holding fits "${a.type}" on the ${street} — kept the range from before it`);
       }
@@ -276,13 +285,15 @@
     }
     const LEN = { flop: 3, turn: 4, river: 5 };
     const board = E.parseCards(t.board || []);
-    let street = 'preflop';
-    for (const a of actions) {
+    let street = 'preflop', pot = 0;
+    for (const a0 of actions) {
+      const potBefore = pot; if (a0.amount > 0) pot += a0.amount;
+      const a = a0.amount > 0 && potBefore > 0 ? { ...a0, size: a0.amount / potBefore } : a0;
       if (a.type === 'street') { street = a.street; continue; }
       if (street === 'preflop' || a.actor !== 'Hero' || !['bet', 'raise', 'allin', 'call', 'check'].includes(a.type)) continue;
       const b = board.slice(0, LEN[street]);
       if (b.length < LEN[street]) continue;
-      try { r = E.weightRange(r, b, a.type); } catch (e) { /* keep the range from before that action */ }
+      try { r = E.weightRange(r, b, a.type, a.size ? { size: a.size } : {}); } catch (e) { /* keep the range from before that action */ }
     }
     return r;
   }
@@ -304,7 +315,7 @@
         // the fold rate for this street (flop/turn/river), and for facing a raise after they bet
         foldOverride: est.f2bStreet && est.f2bStreet[st] != null ? est.f2bStreet[st] : est.f2b, foldToRaise: est.foldToRaise, aggression: est.af,
         foldBias: est.foldBias ? est.foldBias[st] || 0 : 0,
-        foldTo3bet: est.foldTo3bet, threeBetHands: est.raw ? est.raw.f3bOpp || 0 : 0,
+        foldTo3bet: est.foldTo3bet, threeBetHands: est.raw ? est.raw.f3bOpp || 0 : 0, betSize: est.betSize,
         type: est.type ? est.type.short : '?', hands: est.hands || 0, est, preflopRole: role[name(p.seat)] || 'none', ...r }, actions, E.parseCards(board), est);
     });
     return { actions, role, live, villains };

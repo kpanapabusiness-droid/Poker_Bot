@@ -32,7 +32,7 @@
     f2bFlop: { p: 0.40, w: 8 }, f2bTurn: { p: 0.42, w: 8 }, f2bRiver: { p: 0.45, w: 8 }, foldToRaise: { p: 0.50, w: 8 },
   };
   // counters added together hand by hand (opportunity, then success)
-  const COUNTS = ['fbOpp', 'fb', 'f3bOpp', 'f3b', 'cbetOpp', 'cbet', 'fcbOpp', 'fcb', 'ftrOpp', 'ftr',
+  const COUNTS = ['betSizeSum', 'betSizeN', 'fbOpp', 'fb', 'f3bOpp', 'f3b', 'cbetOpp', 'cbet', 'fcbOpp', 'fcb', 'ftrOpp', 'ftr',
     'facedFlop', 'foldFlop', 'facedTurn', 'foldTurn', 'facedRiver', 'foldRiver', 'riverAggr', 'riverCalls'];
   const sizeBand = n => (!n ? null : n <= 2 ? 'hu' : n <= 6 ? 'short' : 'full');
   const MAX_SHOWS = 12, MAX_PROCESSED = 3000;
@@ -59,7 +59,7 @@
   function analyseHand(actions) {
     const P = {}; const get = n => (P[n] = P[n] || { dealt: true, vpip: false, pfr: false, tbOpp: false, tb: false, aggr: 0, calls: 0, facedBet: 0, foldToBet: 0, sawFlop: false, wtsd: false, foldedPre: false, shows: [],
       ...Object.fromEntries(COUNTS.map(k => [k, 0])) });
-    let opener = null, pfRaiser = null, streetBettor = null, flopActed = new Set();
+    let opener = null, pfRaiser = null, streetBettor = null, flopActed = new Set(), potT = 0;
     const betThisStreet = new Set();
     const FACED = { flop: ['facedFlop', 'foldFlop'], turn: ['facedTurn', 'foldTurn'], river: ['facedRiver', 'foldRiver'] };
     const PLAYER_TYPES = new Set(['post', 'fold', 'check', 'call', 'bet', 'raise', 'allin', 'show', 'win']);
@@ -71,6 +71,8 @@
         if (street === 'flop') Object.entries(P).forEach(([, s]) => { if (!s.foldedPre) s.sawFlop = true; });
         continue;
       }
+      const potBefore = potT;
+      if (a.amount > 0) potT += a.amount;  // pot as the hand goes, for bet sizes
       if (!a.actor || !PLAYER_TYPES.has(a.type)) continue;
       const s = get(a.actor);
       if (street === 'preflop') {
@@ -92,6 +94,7 @@
         if (a.type === 'fold') s.foldedPre = true;
       } else {
         const aggro = a.type === 'bet' || a.type === 'raise' || a.type === 'allin';
+        if (aggro && a.amount > 0 && potBefore > 0) { s.betSizeSum += Math.min(3, a.amount / potBefore); s.betSizeN++; }  // their bet sizes
         // c-bet: the preflop raiser's first flop action while nobody has bet
         if (street === 'flop' && a.actor === pfRaiser && !flopActed.has(a.actor) && !betOpen) { s.cbetOpp++; if (aggro) s.cbet++; }
         if (street === 'flop') flopActed.add(a.actor);
@@ -183,6 +186,8 @@
         cbet: shrink(c('cbet'), c('cbetOpp'), PRIORS.cbet),
         foldToCbet: shrink(c('fcb'), c('fcbOpp'), PRIORS.foldToCbet),
         foldToRaise: shrink(c('ftr'), c('ftrOpp'), PRIORS.foldToRaise),
+        // typical postflop bet size (chips / pot before), shrunk toward 0.55 pot with ~8 bets of weight
+        betSize: (c('betSizeSum') + 0.55 * 8) / (c('betSizeN') + 8), betSizeN: c('betSizeN'),
         shows: s.shows.slice(-5),
         raw: s,
       };

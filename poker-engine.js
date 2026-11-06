@@ -375,16 +375,29 @@
    * Returns [c1, c2, w] triples with known cards removed. Throws RangeError if nothing is left
    * (the caller must handle it visibly; it never silently becomes "any two cards").
    */
+  const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
   function weightRange(range, board, action, opts = {}) {
     const b = parseCards(board);
     const street = b.length === 3 ? 'flop' : b.length === 4 ? 'turn' : 'river';
     const used = new Set([...b, ...(opts.dead ? parseCards(opts.dead) : [])]);
     const hs = strengthPercentiles(b);
     const raise = /raise|allin/.test(action);
+    // Bet sizing (opts.size = chips put in / pot before; relSize = size vs this player's usual size, 1 = their
+    // normal). Bigger than usual → a higher value bar and fewer medium hands. Smaller → merged: medium
+    // hands bet small too. Calling a bigger bet needs a stronger hand.
+    // Low stack-to-pot (opts.spr < 1.5): committed, so value and calls widen.
+    const sz = opts.size != null ? clamp(opts.size, 0.05, 3) : null;
+    const rel = opts.relSize != null ? clamp(opts.relSize, 0.2, 4) : sz != null ? sz / 0.55 : 1;
+    const sizeShift = sz == null ? 0 : clamp(0.10 * Math.log2(rel), -0.12, 0.15);
+    const sprShift = opts.spr != null && opts.spr < 1.5 ? -0.06 * (1.5 - Math.max(0, opts.spr)) : 0;
+    // Casual players under-bluff big bets (a big river bet from them is usually value), so bigger than
+    // usual → slightly fewer bluffs, smaller → slightly more. Aggressive players' extra bluffs come in
+    // through opts.bluffKeep (their tracked aggression), not through size.
+    const bluffKeep = (opts.bluffKeep ?? 0.15) * (raise ? 0.5 : 1) * (sz == null ? 1 : clamp(1 - 0.2 * Math.log2(rel), 0.6, 1.25)), floatKeep = opts.floatKeep ?? 0.25;
     // relative to their own range: value-bet the top ~45% / 40% / 35% by street, call with the top ~65% / 60% / 55%
-    const valueThr = (opts.valueThr ?? { flop: 0.55, turn: 0.60, river: 0.65 }[street]) + (raise ? 0.12 : 0);
-    const callThr = opts.callThr ?? { flop: 0.35, turn: 0.40, river: 0.45 }[street];
-    const bluffKeep = (opts.bluffKeep ?? 0.15) * (raise ? 0.5 : 1), floatKeep = opts.floatKeep ?? 0.25;
+    const valueThr = (opts.valueThr ?? { flop: 0.55, turn: 0.60, river: 0.65 }[street]) + (raise ? 0.12 : 0) + (/bet|raise|allin/.test(action) ? sizeShift + sprShift : 0);
+    const callThr = (opts.callThr ?? { flop: 0.35, turn: 0.40, river: 0.45 }[street]) + (action === 'call' ? sizeShift * 0.8 + sprShift : 0);
+
     const drawBet = opts.drawBet ?? 0.55, drawCall = opts.drawCall ?? 0.85, slowplay = opts.slowplay ?? 0.25;
     const W = 0.05; // how gradual the thresholds are (strength units)
     // Thresholds are measured within THIS player's current range (relative strength), not against
@@ -409,7 +422,13 @@
       const [x, y] = c;
       const draw = street !== 'river' && handFeatures([x, y], b).draw;
       let p;
-      if (/bet|raise|allin/.test(action)) p = Math.max(smoothStep(h, valueThr, W), draw ? drawBet * (raise ? 0.6 : 1) : 0, bluffKeep);
+      if (/bet|raise|allin/.test(action)) {
+        // bluffs come from hands with little showdown value (medium hands mostly check, or bet small);
+        // small bets also carry a "merged" share of medium hands
+        const air = 1 - smoothStep(h, 0.45, 0.06);
+        const merge = sz == null ? 0 : clamp(0.15 + 0.3 * (1 - rel), 0, 0.4) * smoothStep(h, 0.3, W) * (1 - smoothStep(h, valueThr, W));
+        p = Math.max(smoothStep(h, valueThr, W), draw ? drawBet * (raise ? 0.6 : 1) : 0, bluffKeep * (sz == null ? 1 : air), merge);
+      }
       else if (action === 'call') p = Math.max(smoothStep(h, callThr, W), draw ? drawCall : 0, floatKeep);
       else if (action === 'check') p = 1 - (1 - slowplay) * Math.max(smoothStep(h, valueThr, W), draw ? drawBet * 0.5 : 0);
       else p = 1;
@@ -419,6 +438,74 @@
     if (!out.length) throw new RangeError(`range is empty after "${action}" on ${b.map(cardToString).join('')}`);
     return out;
   }
+  /**
+   * Each villain holding's equity against a weighted range of ours (what they think we hold), over the
+   * cards still to come — not just the current board. Exact card removal: runout cards, our perceived
+   * holdings and their holding never share a card (blockers). Ties count half.
+   *   river: the board as it is; turn: every river card (exact); flop: `samples` seeded turn+river
+   *   runouts (or all 1,081 with exact: true).
+   * villain / ours: arrays of [c1, c2] or [c1, c2, w]. Returns Float64Array of equities (index = villain).
+   * Fast: per runout, our holdings are sorted once by score with cumulative weights; each villain holding
+   * is a binary search plus a correction for the few of our holdings that share its cards.
+   */
+  function rangeEquityVs(villain, ours, board, { samples = 48, exact = false } = {}) {
+    const b = parseCards(board);
+    const used = new Set(b);
+    const need = 5 - b.length;
+    const deck = []; for (let c = 0; c < 52; c++) if (!used.has(c)) deck.push(c);
+    let runouts;
+    if (need === 0) runouts = [[]];
+    else if (need === 1) runouts = deck.map(c => [c]);
+    else if (exact) { runouts = []; for (let i = 0; i < deck.length; i++) for (let j = i + 1; j < deck.length; j++) runouts.push([deck[i], deck[j]]); }
+    else {
+      runouts = [];
+      for (let k = 0; k < samples; k++) {
+        const i = (rand() * deck.length) | 0; let j = (rand() * (deck.length - 1)) | 0; if (j >= i) j++;
+        runouts.push(need === 2 ? [deck[i], deck[j]] : deck.slice(0, need));
+      }
+    }
+    const O = ours.filter(c => !used.has(c[0]) && !used.has(c[1]) && (c.length < 3 || c[2] > 0));
+    const ow = O.map(c => (c.length > 2 ? c[2] : 1));
+    const eqSum = new Float64Array(villain.length), cnt = new Float64Array(villain.length);
+    const byCard = Array.from({ length: 52 }, () => []);
+    O.forEach((c, i) => { byCard[c[0]].push(i); byCard[c[1]].push(i); });
+    for (const R of runouts) {
+      const full = [...b, ...R];
+      const rset = new Set(R);
+      const sc = new Float64Array(O.length);
+      const idx = [];
+      for (let i = 0; i < O.length; i++) {
+        if (rset.has(O[i][0]) || rset.has(O[i][1])) { sc[i] = -1; continue; }
+        sc[i] = evaluate([O[i][0], O[i][1], ...full]); idx.push(i);
+      }
+      idx.sort((p, q) => sc[p] - sc[q]);
+      const sorted = idx.map(i => sc[i]);
+      const cum = new Float64Array(idx.length + 1);
+      for (let k = 0; k < idx.length; k++) cum[k + 1] = cum[k] + ow[idx[k]];
+      const total = cum[idx.length];
+      const lowerBound = x => { let lo = 0, hi = sorted.length; while (lo < hi) { const m = (lo + hi) >> 1; if (sorted[m] < x) lo = m + 1; else hi = m; } return lo; };
+      const upperBound = x => { let lo = 0, hi = sorted.length; while (lo < hi) { const m = (lo + hi) >> 1; if (sorted[m] <= x) lo = m + 1; else hi = m; } return lo; };
+      for (let v = 0; v < villain.length; v++) {
+        const [x, y] = villain[v];
+        if (used.has(x) || used.has(y) || rset.has(x) || rset.has(y)) continue;
+        const s = evaluate([x, y, ...full]);
+        const lo = lowerBound(s), hi = upperBound(s);
+        let below = cum[lo], ties = cum[hi] - cum[lo], tot = total;
+        // our holdings that share a card with theirs can't exist alongside it
+        const seen = new Set();
+        for (const i of [...byCard[x], ...byCard[y]]) {
+          if (seen.has(i) || sc[i] < 0) continue; seen.add(i);
+          tot -= ow[i];
+          if (sc[i] < s) below -= ow[i]; else if (sc[i] === s) ties -= ow[i];
+        }
+        if (tot <= 1e-12) continue;
+        eqSum[v] += (below + ties / 2) / tot; cnt[v]++;
+      }
+    }
+    for (let v = 0; v < villain.length; v++) eqSum[v] = cnt[v] ? eqSum[v] / cnt[v] : 0.5;
+    return eqSum;
+  }
+
   /** Effective number of combos in a (weighted) range. */
   /**
    * A soft preflop range: every hand gets a weight that falls smoothly from 1 around the top `pct` of
@@ -625,7 +712,7 @@
     // ranges
     parseRange, rangePercent, inRange, handClass,
     // equity
-    equity, setSeed, strengthPercentiles, weightRange, rangeSize, softRange,
+    equity, setSeed, random: () => rand(), strengthPercentiles, weightRange, rangeSize, softRange, rangeEquityVs,
     // odds
     potOdds, callEV, mdf, bluffBreakeven, spr, outsToEquity,
     // preflop

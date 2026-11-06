@@ -84,7 +84,7 @@
     // call more than a range-reasoner would, so perceivedWeight is 0.25 (it was 0.5) and thresholds lower.
     response: { base: { flop: 0.48, turn: 0.48, river: 0.50 }, priceSlope: 0.6, vsRaise: 0.06, f2bShift: 1.0, width: 0.04, drawCall: 0.95,
                 // perceived-range model: continue when equity vs what our bet represents > price + callBias + stickiness × (f2b − 0.4)
-                callBias: 0.0, stickiness: 1.2, eqWidth: 0.06, perceivedWeight: 0.25, perceivedWeightVsRaise: 0.75 },
+                callBias: 0.0, stickiness: 1.2, eqWidth: 0.06, perceivedWeight: 0.25, perceivedWeightVsRaise: 0.75, runoutSamples: 48, strongHand: 0.85 },
     // Stack depth preflop: short (≤ shortBB) drops speculative calls/limps that need deep stacks to
     // pay off; deep (≥ deepBB) adds more of them in position.
     depth: { on: true, shortBB: 40, deepBB: 150, deepFlat: '22-66,A2s-A9s,K9s,Q9s,J9s,T8s,97s,86s,75s,64s,54s' },
@@ -319,13 +319,25 @@
       // perceivedWeight blends the two (0 = own hand only, 1 = our range only).
       const pr = perceivedResponse(table, street, need, f2b == null ? null : f2b - (facingRaise ? 0.1 : 0), perceived, board, bias);
       // facing a raise after they bet, even casual players think about what the raise means
-      const k = facingRaise ? R.perceivedWeightVsRaise : R.perceivedWeight;
-      if (k >= 1) return pr;
+      const k0 = facingRaise ? R.perceivedWeightVsRaise : R.perceivedWeight;
       const own = rangeResponse(table, absHS, street, need, facingRaise, f2b, null, board, bias);
-      const m = new Map(own.cont.map(c => [c[0] * 52 + c[1], c[2]]));
-      const cont = pr.cont.map(c => [c[0], c[1], (1 - k) * (m.get(c[0] * 52 + c[1]) || 0) + k * c[2]]);
-      for (const c of own.cont) if (!pr.cont.some(x => x[0] === c[0] && x[1] === c[1])) cont.push([c[0], c[1], (1 - k) * c[2]]);
-      return { fold: (1 - k) * own.fold + k * pr.fold, cont: cont.filter(c => c[2] > 1e-6) };
+      // Blend per holding: strong made hands mostly ignore what our line represents (casual players
+      // don't fold trips to a raise), medium and weak hands respect it. k falls to 0 above the
+      // strongHand strength percentile.
+      const ownW = new Map(own.cont.map(c => [c[0] * 52 + c[1], c[2]]));
+      const prW = new Map(pr.cont.map(c => [c[0] * 52 + c[1], c[2]]));
+      let tw = 0, cw = 0;
+      const cont = [];
+      for (const e of table) {
+        const key = e.c[0] * 52 + e.c[1];
+        const kk = e.c[0] < e.c[1] ? e.c[0] * 52 + e.c[1] : e.c[1] * 52 + e.c[0];
+        const strong = 1 / (1 + Math.exp(-((absHS.get(kk) ?? 0.5) - R.strongHand) / 0.03));
+        const k = k0 * (1 - strong);
+        const w = (1 - k) * (ownW.get(key) || 0) + k * (prW.get(key) || 0);
+        tw += e.w; cw += w;
+        if (w > 1e-6) cont.push([e.c[0], e.c[1], w]);
+      }
+      return { fold: tw > 0 ? 1 - cw / tw : 1, cont };
     }
     // f2b here is the stat for this situation: fold-to-bet when facing a bet, fold-to-raise when they bet
     // and face our raise (centred on its own prior, 0.5). Unknown → no shift.
@@ -489,25 +501,39 @@
    * perceived holdings that share a card with theirs don't count (blockers). Before the river, draws
    * continue at a rate that falls with the price.
    */
+  // What our range looks like after this bet (cached per decision, kind and size bucket).
+  let PERC = new Map();
+  function perceivedAfter(heroRange, board, kind, hero, size) {
+    if (!heroRange) return null;
+    const key = kind + ':' + (Math.round(size * 4) / 4);
+    if (!PERC.has(key)) {
+      let r = null;
+      try { r = E.weightRange(heroRange, board, kind, { dead: hero, size }); } catch (e) { r = null; }
+      PERC.set(key, r);
+    }
+    return PERC.get(key);
+  }
+  // Per-decision cache: their equity vs our perceived range doesn't change with our bet size.
+  let EQV = new Map();
+  function equityVsPerceived(table, perceived, board) {
+    let byTable = EQV.get(perceived);
+    if (!byTable) { byTable = new Map(); EQV.set(perceived, byTable); }
+    if (!byTable.has(table)) byTable.set(table, E.rangeEquityVs(table.map(e => e.c), perceived, board, { samples: MODEL.response.runoutSamples }));
+    return byTable.get(table);
+  }
   function perceivedResponse(table, street, need, f2b, perceived, board, bias) {
     const R = MODEL.response;
-    const ours = perceived.map(c => ({ a: c[0], b: c[1], w: c.length > 2 ? c[2] : 1, s: E.evaluate([c[0], c[1], ...board]) }))
-      .filter(o => !board.includes(o.a) && !board.includes(o.b));
     const thr = need + R.callBias + R.stickiness * ((f2b ?? 0.4) - 0.4) + (bias || 0);
     const drawCall = clamp(R.drawCall - 1.5 * (need - 0.2), 0.15, 0.95);
+    // their equity over the cards to come (draws included), not current-board strength
+    const eqs = equityVsPerceived(table, perceived, board);
     let tw = 0, cw = 0;
     const cont = [];
-    for (const e of table) {
-      const [x, y] = e.c, sv = E.evaluate([x, y, ...board]);
-      let win = 0, tot = 0;
-      for (const o of ours) {
-        if (o.a === x || o.a === y || o.b === x || o.b === y) continue;  // blockers
-        tot += o.w;
-        if (sv > o.s) win += o.w; else if (sv === o.s) win += o.w / 2;
-      }
-      const eq = tot ? win / tot : 0.5;
+    for (let ti = 0; ti < table.length; ti++) {
+      const e = table[ti], [x, y] = e.c, eq = eqs[ti];
       let p = 1 / (1 + Math.exp(-(eq - thr) / R.eqWidth));
-      if (street !== 'river' && e.draw) p = Math.max(p, drawCall);
+      // draws: equity over the runouts already counts them; keep a floor for implied odds before the river
+      if (street !== 'river' && e.draw) p = Math.max(p, drawCall * 0.5);
       tw += e.w; cw += e.w * p;
       if (e.w * p > 1e-6) cont.push([x, y, e.w * p]);
     }
@@ -524,8 +550,7 @@
   function evalAggression({ villains, tables, absHS, hero, board, pot, add, totalTo, street, real, heroBet, heroRange, isRaise }) {
     const n = villains.length;
     // what this bet says about us: our perceived range, narrowed by this action
-    let perceived = null;
-    if (heroRange) { try { perceived = E.weightRange(heroRange, board, isRaise ? 'raise' : 'bet', { dead: hero }); } catch (e) { perceived = null; } }
+    const perceived = perceivedAfter(heroRange, board, isRaise ? 'raise' : 'bet', hero, add / Math.max(pot, 1e-9));
     const resp = villains.map((v, i) => {
       const callAmt = Math.max(0, Math.min(totalTo - (v.bet || 0), v.stack != null ? v.stack : Infinity));
       const need = callAmt / (pot + add + callAmt);
@@ -538,34 +563,52 @@
     if (MODEL.mdfCap > 0) resp.forEach(r => { const cap = MODEL.mdfCap * r.callAmt / (pot + add); if (r.fold > cap) r.fold = cap; });
     const folds = resp.map(r => r.fold);
     const allFold = folds.reduce((p, x) => p * x, 1);
+    // Every combination of callers, exactly (no random sampling). With many opponents only the 8 most
+    // likely callers are enumerated; any caller combination too unlikely to evaluate (or involving the
+    // others) is counted as a loss of everything we put in, so a bluff's EV can't be inflated by
+    // scenarios we skipped.
+    const order = villains.map((_, i) => i).sort((a, b) => folds[a] - folds[b]);
+    const top = order.slice(0, 8), rest = order.slice(8);
+    const pRestFold = rest.reduce((p, i) => p * folds[i], 1);
     const subsets = [];
-    if (n <= 4) {
-      for (let m = 1; m < 1 << n; m++) {
-        let p = 1; const who = [];
-        for (let i = 0; i < n; i++) { if (m & (1 << i)) { p *= 1 - folds[i]; who.push(i); } else p *= folds[i]; }
-        if (p > 1e-4) subsets.push({ who, p });
-      }
-    } else {  // many villains: sample caller combinations (seeded through the engine's random source)
-      const seen = new Map();
-      for (let k = 0; k < 24; k++) {
-        const who = []; for (let i = 0; i < n; i++) if (Math.random() >= folds[i]) who.push(i);
-        if (!who.length) continue;
-        const key = who.join(','); seen.set(key, (seen.get(key) || 0) + 1);
-      }
-      const tot = [...seen.values()].reduce((a, b) => a + b, 0);
-      for (const [key, c] of seen) subsets.push({ who: key.split(',').map(Number), p: (1 - allFold) * c / tot });
+    let skipped = 1 - pRestFold;  // anyone outside the top 8 calling
+    for (let m = 1; m < 1 << top.length; m++) {
+      let p = pRestFold; const who = [];
+      for (let k = 0; k < top.length; k++) { const i = top[k]; if (m & (1 << k)) { p *= 1 - folds[i]; who.push(i); } else p *= folds[i]; }
+      if (p > 1e-4) subsets.push({ who, p }); else skipped += p;
     }
+    const eqMemo = new Map();
+    const eqVs = who => {
+      const key = who.join(',');
+      if (!eqMemo.has(key)) eqMemo.set(key, heroEquity(hero, board, who.map(i => resp[i].cont), who.length > 1 ? 2000 : MODEL.equityIters));
+      return eqMemo.get(key);
+    };
     let ev = allFold * pot, eqSum = 0, pSum = 0;
     const cases = [];
+    const rl = street === 'river' ? 1 : real;
     for (const { who, p } of subsets) {
-      const eq = heroEquity(hero, board, who.map(i => resp[i].cont), who.length > 1 ? 2000 : MODEL.equityIters);
-      const matched = Math.max(...who.map(i => (villains[i].bet || 0) + resp[i].callAmt));
-      const ourAdd = Math.min(add, Math.max(0, matched - heroBet));
-      const finalPot = pot + ourAdd + who.reduce((t, i) => t + resp[i].callAmt, 0);
-      ev += p * (eq * (street === 'river' ? 1 : real) * finalPot - ourAdd);
-      eqSum += p * eq; pSum += p;
-      if (cases.length < 6) cases.push({ callers: who.map(i => villains[i].name), p: +p.toFixed(3), eq: +eq.toFixed(3) });
+      // Side pots by each player's total on this street (T). Slice k = (L_k − L_{k−1}) × everyone who
+      // reached L_k (us + callers); the first slice also holds the dead money (earlier streets, folded
+      // players' bets). Each slice is won against only the callers who reached it. Our chips above the
+      // deepest caller's total come back.
+      const T = who.map(i => ({ i, t: (villains[i].bet || 0) + resp[i].callAmt }));
+      const maxT = Math.max(...T.map(x => x.t));
+      const ourAdd = Math.max(0, Math.min(totalTo, maxT) - heroBet);
+      const dead = Math.max(0, pot - heroBet - T.reduce((a, x) => a + (villains[x.i].bet || 0), 0));
+      const levels = [...new Set(T.map(x => Math.min(x.t, totalTo)))].sort((a, b) => a - b);
+      let won = 0, prev = 0, eqMain = null;
+      for (const L of levels) {
+        const elig = T.filter(x => Math.min(x.t, totalTo) >= L).map(x => x.i);
+        const eq = eqVs(elig);
+        if (eqMain === null) eqMain = eq;
+        won += eq * ((L - prev) * (1 + elig.length) + (prev === 0 ? dead : 0));
+        prev = L;
+      }
+      ev += p * (rl * won - ourAdd);
+      eqSum += p * eqMain; pSum += p;
+      if (cases.length < 6) cases.push({ callers: who.map(i => villains[i].name), p: +p.toFixed(3), eq: +eqMain.toFixed(3) });
     }
+    if (skipped > 0) ev -= skipped * add;  // pessimistic: everything we put in is lost
     return { ev, eqC: pSum ? eqSum / pSum : null, allFold, folds, cases };
   }
 
@@ -762,7 +805,7 @@
 
   /** One entry point: picks preflop or postflop logic. */
   function decide(ctx) {
-    WARN = [];
+    WARN = []; EQV = new Map(); PERC = new Map();
     const d = ctx.board && ctx.board.length >= 3 ? postflop(ctx) : preflop(ctx);
     if (WARN.length) d.warnings = [...(d.warnings || []), ...WARN];
     return d;
