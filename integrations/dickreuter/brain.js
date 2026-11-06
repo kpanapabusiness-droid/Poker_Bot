@@ -74,12 +74,36 @@
   }
 
   // ── Positions and action order ──
-  const seatsFromButton = (seat, t) => (seat - t.dealer + t.nSeats) % t.nSeats;
-  function positionOf(seat, t) { return E.positionFromSeat(seatsFromButton(seat, t), t.nSeats); }
+  /**
+   * Seats with someone sitting in them, clockwise from hero. Empty seats are skipped for positions,
+   * blinds and acting order (a 9-seat table with 5 players plays like 5-handed). A seat counts as
+   * taken if it has a stack, chips in front, or cards; hero and the dealer always count.
+   */
+  function ring(t) {
+    if (t._ring) return t._ring;
+    const taken = new Set([0, t.dealer]);
+    for (const p of t.players || []) if ((p.stack || 0) > 0 || (p.bet || 0) > 0 || p.inHand) taken.add(p.seat);
+    for (const h of t.history || []) {
+      for (const [seat, b] of Object.entries(h.bets || {})) if (b > 0) taken.add(Number(seat));
+      for (const seat of h.live || []) taken.add(Number(seat));
+    }
+    const r = [...taken].filter(x => x >= 0 && x < t.nSeats).sort((a, b) => a - b);
+    Object.defineProperty(t, '_ring', { value: r, enumerable: false });
+    return r;
+  }
+  const tableSize = t => ring(t).length;
+  const seatsFromButton = (seat, t) => {
+    const r = ring(t), n = r.length;
+    const i = r.indexOf(seat), d = r.indexOf(t.dealer);
+    if (i < 0) return (seat - t.dealer + t.nSeats) % t.nSeats; // not seated (shouldn't happen)
+    return (i - d + n) % n;
+  };
+  function positionOf(seat, t) { return E.positionFromSeat(seatsFromButton(seat, t), tableSize(t)); }
   /** Order players act in: preflop starts left of the big blind, postflop left of the button. */
   function actingOrder(seats, t, street) {
-    const first = street === 'preflop' ? (t.nSeats === 2 ? 0 : 3) : 1;
-    return [...seats].sort((a, b) => ((seatsFromButton(a, t) - first + t.nSeats) % t.nSeats) - ((seatsFromButton(b, t) - first + t.nSeats) % t.nSeats));
+    const n = tableSize(t);
+    const first = street === 'preflop' ? (n === 2 ? 0 : 3) : 1;
+    return [...seats].sort((a, b) => ((seatsFromButton(a, t) - first + n * 2) % n) - ((seatsFromButton(b, t) - first + n * 2) % n));
   }
 
   /**
@@ -97,8 +121,8 @@
     for (const p of t.players) current.bets[p.seat] = p.bet || 0;
     const snaps = [...(t.history || []), current];
     const stackOf = seat => (seat === 0 ? t.heroStack : (t.players.find(p => p.seat === seat) || {}).stack);
-    const allSeats = [0, ...t.players.map(p => p.seat)];
-    const sb = t.nSeats === 2 ? 0 : 1, bbSeat = t.nSeats === 2 ? 1 : 2;
+    const allSeats = ring(t); // hero and everyone sitting at the table
+    const sb = tableSize(t) === 2 ? 0 : 1, bbSeat = tableSize(t) === 2 ? 1 : 2;
     const k = seat => seatsFromButton(seat, t);
     const actions = [];
     let cur = null, level = 0, put = {};
