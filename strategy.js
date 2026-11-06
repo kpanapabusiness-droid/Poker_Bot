@@ -58,7 +58,10 @@
     // A raise that only works as a bluff must beat calling/checking by this share of the pot: the
     // fold estimate is the least reliable number here, so don't bluff away a hand that can win at showdown
     // on a thin edge.
-    bluffMargin: 0.10,
+    bluffMargin: 0.10,  // (replaced by `uncertainty` below; kept so old overrides don't break)
+    // margin (share of the pot) an aggressive line must beat the passive one by: base + unknown × u,
+    // u = 1 with no read (< 15 hands), 0.6, 0.3, 0.1 with 100+ hands
+    uncertainty: { base: 0.04, unknown: 0.08 },
     // How villains respond to our bets/raises (rangeFolds on): each holding continues with probability
     // rising around an absolute strength threshold that goes up with the price (need = their call /
     // the pot after calling) and when they're facing a raise. off = the older population fold curve.
@@ -71,9 +74,11 @@
     // the 52nd percentile of the modelled river range (50 = unbiased; the old values put it at the 30th).
     rangeModel: { base: { flop: [0.55, 0.25], turn: [0.58, 0.30], river: [0.60, 0.35] }, bluffBase: 0.12, bluffPerAf: 0.07, bluffMax: 0.45,
                   floatScale: 1.0, slowplay: 0.25 },
-    response: { base: { flop: 0.50, turn: 0.58, river: 0.64 }, priceSlope: 0.6, vsRaise: 0.06, f2bShift: 1.0, width: 0.04, drawCall: 0.9,
+    // Calibrated 7 Nov against simulated folds (expected vs actual, turn bluffs 41% vs 46%): casual players
+    // call more than a range-reasoner would, so perceivedWeight is 0.25 (it was 0.5) and thresholds lower.
+    response: { base: { flop: 0.48, turn: 0.48, river: 0.50 }, priceSlope: 0.6, vsRaise: 0.06, f2bShift: 1.0, width: 0.04, drawCall: 0.95,
                 // perceived-range model: continue when equity vs what our bet represents > price + callBias + stickiness × (f2b − 0.4)
-                callBias: 0.0, stickiness: 0.8, eqWidth: 0.06, perceivedWeight: 0.5 },
+                callBias: 0.0, stickiness: 1.2, eqWidth: 0.06, perceivedWeight: 0.25, perceivedWeightVsRaise: 0.75 },
     // Stack depth preflop: short (≤ shortBB) drops speculative calls/limps that need deep stacks to
     // pay off; deep (≥ deepBB) adds more of them in position.
     depth: { on: true, shortBB: 40, deepBB: 150, deepFlat: '22-66,A2s-A9s,K9s,Q9s,J9s,T8s,97s,86s,75s,64s,54s' },
@@ -257,7 +262,8 @@
       // Casual players mostly look at their own hand; better players weigh what our line represents.
       // perceivedWeight blends the two (0 = own hand only, 1 = our range only).
       const pr = perceivedResponse(table, street, need, f2b == null ? null : f2b - (facingRaise ? 0.1 : 0), perceived, board);
-      const k = R.perceivedWeight;
+      // facing a raise after they bet, even casual players think about what the raise means
+      const k = facingRaise ? R.perceivedWeightVsRaise : R.perceivedWeight;
       if (k >= 1) return pr;
       const own = rangeResponse(table, absHS, street, need, facingRaise, f2b, null, board);
       const m = new Map(own.cont.map(c => [c[0] * 52 + c[1], c[2]]));
@@ -611,10 +617,16 @@
       const alt = options.filter(o => o.action === 'CALL' || o.action === 'FOLD' || (o.action === 'ALL-IN' && o.eqC == null)).sort((a, b) => b.ev - a.ev)[0];
       if (alt) best = alt;
     }
-    // Bluff-raising a bettor must clearly beat the passive line (a bluff is a raise whose equity when
-    // called is poor).
-    if (facing && ['RAISE', 'ALL-IN'].includes(best.action) && best.eqC != null && best.eqC < 0.5 && passive
-        && best.ev - passive.ev < MODEL.bluffMargin * pot) best = passive;
+    // Model uncertainty: an aggressive line must beat the passive one by a margin that grows the less we
+    // know about the opponent (few hands seen → our range and fold estimates are mostly population
+    // guesses). Raises facing a bet pay the full margin; bets that are mostly bluffs pay half.
+    if (passive && ['BET', 'RAISE', 'ALL-IN'].includes(best.action)) {
+      const U = MODEL.uncertainty;
+      const known = Math.min(...villains.map(v => v.hands || 0));
+      const u = known >= 100 ? 0.1 : known >= 40 ? 0.3 : known >= 15 ? 0.6 : 1;
+      const margin = (U.base + U.unknown * u) * (facing ? 1 : (best.eqC != null && best.eqC < 0.5 ? 0.5 : 0));
+      if (margin > 0 && best.ev - passive.ev < margin * pot) best = passive;
+    }
     if (best.action === 'CALL' && best.ev < 0) best = options.find(o => o.action === 'FOLD') || best;
     // Out of position on the flop vs the preflop raiser: check everything but value hands to them.
     if (MODEL.noDonk && !ip && !facing && street === 'flop' && best.action === 'BET' && villainHasInitiative(ctx)) {
