@@ -103,7 +103,9 @@ def main(repo):
         print(f"  patched: {os.path.relpath(so)} (thousands commas)")
     mm = os.path.join(pkg, 'tools', 'mouse_mover.py')
     # an earlier version added a Torn-only auto-act block; start mouse_mover from dickreuter's original again
-    if os.path.exists(mm + '.orig') and '_acting_allowed' in open(mm, encoding='utf-8').read():
+    _mm_src = open(mm, encoding='utf-8').read()
+    if os.path.exists(mm + '.orig') and ('_acting_allowed' in _mm_src or
+            ('smooth mouse' in _mm_src and 'sits still until' not in _mm_src)):
         shutil.copy(mm + '.orig', mm)
     patch(mm,
           "log = logging.getLogger(__name__)\n",
@@ -272,7 +274,7 @@ def main(repo):
     patch(mm,
           "    def move_mouse_away_from_buttons_jump(self):\n",
           "    def move_mouse_away_from_buttons_jump(self):  # poker-coach: smooth mouse\n"
-          "        self.move_mouse_away_from_buttons()\n\n"
+          "        return  # dickreuter calls this every loop; the mouse now sits still until it's time to act\n\n"
           "    def _move_mouse_away_from_buttons_jump_original(self):\n",
           "def move_mouse_away_from_buttons_jump(self):  # poker-coach: smooth mouse")
     patch(mm,
