@@ -53,6 +53,22 @@ STYLES = {
                    call=dict(air=.20, draw=.65, weak=.70, top=.90, strong=.98), elastic=.20,
                    bet=dict(air=.50, draw=.70, weak=.55, top=.85, strong=.90), cbet=.80,
                    raise_strong=.55, raise_bluff=.18, size=(.75, 1.3), hero_call=.10, mistake=.07),
+    # 7 Nov: opponents that react to US, so range reasoning and bluff frequency can be measured.
+    # thinker: reads our line (folds medium hands to repeated aggression, calls a sudden bet lighter)
+    'thinker': dict(vpip=.26, pfr=.18, three_bet=.06, call_raise=.14, limp=.15, open_bb=(2.5, 3.0),
+                    call=dict(air=.08, draw=.55, weak=.55, top=.85, strong=.97), elastic=.40,
+                    bet=dict(air=.22, draw=.45, weak=.25, top=.70, strong=.80), cbet=.60,
+                    raise_strong=.40, raise_bluff=.06, size=(.4, .8), hero_call=.08, mistake=.03, reads_line=True),
+    # adaptive: if it keeps getting bet into after checking, it calls lighter and raises back more
+    'adaptive': dict(vpip=.32, pfr=.13, three_bet=.05, call_raise=.22, limp=.5, open_bb=(2.5, 3.5),
+                     call=dict(air=.10, draw=.55, weak=.55, top=.85, strong=.96), elastic=.35,
+                     bet=dict(air=.14, draw=.32, weak=.20, top=.65, strong=.80), cbet=.55,
+                     raise_strong=.30, raise_bluff=.04, size=(.4, .75), hero_call=.07, mistake=.05, adapts=True),
+    # bluffer: bets and raises missed hands on the river a lot
+    'bluffer': dict(vpip=.38, pfr=.20, three_bet=.08, call_raise=.22, limp=.3, open_bb=(2.5, 3.5),
+                    call=dict(air=.12, draw=.60, weak=.60, top=.85, strong=.96), elastic=.30,
+                    bet=dict(air=.45, draw=.55, weak=.30, top=.70, strong=.80), cbet=.70,
+                    raise_strong=.35, raise_bluff=.15, size=(.5, 1.0), hero_call=.10, mistake=.05),
 }
 STYLE_NAMES = tuple(STYLES)
 
@@ -159,6 +175,7 @@ class Human:
                 self.s[k] = min(0.95, j(v)) if v < 1 else j(v)
         self.tilt = 0          # hands of tilt left
         self.recent = []       # last few results in bb
+        self.checked_then_bet = [0, 0]  # adaptive: [times bet into after checking, times checked]
         self.new_hand()
 
     # ── called by the simulator ──
@@ -171,6 +188,8 @@ class Human:
         self.pf_aggressor = False
         self.acted_street = None
         self.raises_this_street = 0
+        self.faced_streets = set()   # postflop streets where someone bet into us
+        self.checked_on = None       # street we last checked on (for the adaptive player)
         self.hand_mood = self.r.gauss(0, 0.08)  # some hands you just feel like playing
 
     def hand_over(self, result_bb):
@@ -280,7 +299,13 @@ class Human:
                 p = max(p, self._p('cbet') * (1.0 if cat != 'air' else 0.8))
             if multiway >= 2 and cat in ('air', 'weak'):
                 p *= 0.5
+            if self.s.get('adapts'):
+                self.checked_on = street
+                self.checked_then_bet[1] += 1
             if can_raise and r() < p:
+                if self.s.get('adapts'):
+                    self.checked_on = None
+                    self.checked_then_bet[1] -= 1
                 small, big = self.s['size']
                 lean = {'strong': 0.75, 'top': 0.5, 'weak': 0.3, 'draw': 0.4, 'air': 0.35}[cat]
                 frac = big if r() < lean else small
@@ -290,6 +315,19 @@ class Human:
         # facing a bet
         f = v['to_call'] / max(1e-9, v['total_pot'])  # bet as a share of the pot (the pot includes the bet)
         cont = self._p('call', cat) * max(0.05, 1 - self._p('elastic') * min(2.0, f) * 1.4)
+        self.faced_streets.add(street)
+        if self.s.get('reads_line') and cat in ('weak', 'top', 'draw'):
+            # repeated aggression looks strong; a first bet after checks looks like a stab
+            n = len(self.faced_streets)
+            cont *= 1.25 if n == 1 and street != 'flop' else max(0.5, 1 - 0.18 * (n - 1))
+        if self.s.get('adapts'):
+            if self.checked_on is not None:
+                self.checked_then_bet[0] += 1
+            seen = self.checked_then_bet[1]
+            rate = self.checked_then_bet[0] / seen if seen >= 10 else 0.4
+            if rate > 0.5:  # it keeps getting bet into: call lighter, fight back
+                cont = min(0.98, cont * (1 + (rate - 0.5) * 1.6))
+                self.s['raise_bluff'] = min(0.25, STYLES['adaptive']['raise_bluff'] * (1 + 4 * (rate - 0.5)))
         if street == 'river' and cat == 'air':
             cont = self._p('hero_call')
         if self.raises_this_street >= 1:

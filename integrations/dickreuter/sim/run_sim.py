@@ -123,12 +123,15 @@ LINEUPS = {'humans': 'coachx,h-rec,h-fish,h-tag,h-nit,h-maniac',
 
 
 HUMAN_STYLES = ['h-rec', 'h-fish', 'h-tag', 'h-nit', 'h-maniac', 'h-station']
+# opponents that react to us (7 Nov): --lineup humans2
+HUMAN_STYLES2 = ['h-thinker', 'h-adaptive', 'h-bluffer', 'h-rec', 'h-fish', 'h-tag', 'h-nit', 'h-maniac']
 PHYSICAL_SEATS = int(os.environ['POKER_COACH_SIM_PHYSICAL']) if os.environ.get('POKER_COACH_SIM_PHYSICAL') else None  # --physical-seats
 
 
-def human_lineup(coach, seats):
+def human_lineup(coach, seats, styles=None):
     """The coach plus `seats - 1` casual humans, styles cycling (so 9-handed has two recs, two fish...)."""
-    return [coach] + [HUMAN_STYLES[i % len(HUMAN_STYLES)] for i in range(seats - 1)]
+    styles = styles or HUMAN_STYLES
+    return [coach] + [styles[i % len(styles)] for i in range(seats - 1)]
 
 
 def make(kind, idx, dr_dir, strategy, tracker_dir):
@@ -237,6 +240,8 @@ def run(hands, lineup, seed, dr_dir, bb=2.0, stack=200.0, progress=True, learn=T
             for j in seating:  # humans: same deck and table → same dice, whichever coach version is playing
                 if hasattr(agents[j], 'reseed'):
                     agents[j].reseed(f'{seed}-{h}-{r_i}')
+            for pos_, j in enumerate(seating):  # debug dumps only: lets a seat look up other players' real cards
+                agents[j]._sim_deal = (deck, pos_, seats)
             table = holdem.Table(order, bb=bb, start_stack=stack, names=[names[j] for j in seating])
             result, rec = table.play(deck, button)
             scored = rec['result_ev'] if luck == 'ev' else result
@@ -247,10 +252,11 @@ def run(hands, lineup, seed, dr_dir, bb=2.0, stack=200.0, progress=True, learn=T
                 totals[kinds[j]] += scored[pos] / bb
                 if detail is not None:
                     a = agents[j]
+                    agg = _agg_outcomes(getattr(a, 'agg', None), rec, pos)
                     rows.append({'deck': h, 'table': seatings.index(seating), 'bot': kinds[j], 'seat_from_button': (pos - button) % seats,
                                  'cards': ''.join(rec['hole'][pos]), 'result_bb': round(scored[pos] / bb, 3),
                                  'actual_bb': round(result[pos] / bb, 2),
-                                 'showdown': rec['showdown'], 'actions': ' '.join(getattr(a, 'hand_log', []))})
+                                 'showdown': rec['showdown'], 'actions': ' '.join(getattr(a, 'hand_log', [])), 'agg': agg})
             played += 1
         for k in pair:
             per_pair[k].append(pair[k] / kinds.count(k))  # bb per player of this type, both tables
@@ -265,6 +271,32 @@ def run(hands, lineup, seed, dr_dir, bb=2.0, stack=200.0, progress=True, learn=T
     out['per_pair'] = per_pair
     out['rot'] = rot
     return out
+
+
+def _agg_outcomes(agg, rec, pos):
+    """Pair each of a coach seat's postflop bets/raises with what happened next on that street: 'F' if
+    everyone folded, 'C' if someone called or raised. Encoded 'street:tag:fold_est:outcome;...'."""
+    if not agg:
+        return ''
+    acts = rec['actions']
+    n = len(rec['hole'])
+    out = []
+    face = [d for d in agg if d.get('face')]
+    agg = [d for d in agg if not d.get('face')]
+    for d in face:  # calls/folds facing a bet: predicted equity vs the real showdown against the bettor
+        b = (pos + d['bettor']) % n
+        mine_r, theirs = holdem.hand_rank(rec['hole'][pos] + rec['board']), holdem.hand_rank(rec['hole'][b] + rec['board'])
+        res = 'W' if mine_r > theirs else 'L' if mine_r < theirs else 'T'
+        tag = d['tag'] + ('' if d.get('opps', 1) == 1 else '-MW')
+        out.append(f"{d['street'][0]}:{tag}:{round(d['eq'] or 0, 3)}/{round(d['need'], 3)}:{res}")
+    mine = [k for k, (st, i, act, _) in enumerate(acts) if i == pos and act == 'raise' and st != 'preflop']
+    for k, d in zip(mine, agg):
+        st = acts[k][0]
+        later = [a for a in acts[k + 1:] if a[0] == st and a[1] != pos]
+        res = 'C' if any(a[2] in ('call', 'raise') for a in later) else 'F'
+        fe = d.get('fold_est')
+        out.append(f"{st[0]}:{d['tag']}:{'' if fe is None else round(fe, 3)}:{res}")
+    return ';'.join(out)
 
 
 def _worker(args):
@@ -338,8 +370,11 @@ def main():
     o = ap.parse_args()
     global PHYSICAL_SEATS
     PHYSICAL_SEATS = o.physical_seats
-    if o.lineup in ('humans', 'humans-ns'):
-        lineup = human_lineup('coachx' if o.lineup == 'humans' else 'coachxns', o.seats)
+    if o.lineup in ('humans', 'humans-ns', 'humans2'):
+        lineup = human_lineup('coachxns' if o.lineup == 'humans-ns' else 'coachx', o.seats,
+                              HUMAN_STYLES2 if o.lineup == 'humans2' else None)
+    elif o.lineup.startswith('vs-'):  # heads-up against one style: --lineup vs-thinker --seats 2
+        lineup = ['coachx', 'h-' + o.lineup[3:]]
     else:
         lineup = LINEUPS.get(o.lineup, o.lineup).split(',')
     kw = dict(hands=o.hands, lineup=lineup, seed=o.seed, dr_dir=os.path.abspath(o.dickreuter), learn=not o.no_learn,

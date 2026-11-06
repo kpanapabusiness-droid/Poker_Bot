@@ -56,6 +56,17 @@
 
   function villainRange(action, position, est) {
     const pfrW = clamp(est.pfr * (POS_WIDTH[position] || 1), 0.03, 0.8);
+    const SP = S.MODEL.preflopSoft;
+    if (SP && SP.on) {
+      const o = { edge: SP.edge, floor: SP.floor };
+      switch (action) {
+        case 'raise': return { combos: E.softRange(pfrW, o), label: `opened ${position} · top ${Math.round(pfrW * 100)}%` };
+        case '3bet+': { const w = clamp(est.threeBet * 1.3, 0.02, 0.35); return { combos: E.softRange(w, o), label: `3-bet+ · top ${Math.round(w * 100)}%` }; }
+        case 'call': { const w = clamp(est.vpip, 0.08, 0.85); return { combos: E.softRange(w, { ...o, minus: clamp(est.threeBet * 0.6, 0.01, 0.2) }), label: `called a raise · ${Math.round(w * 100)}%` }; }
+        case 'limp': { const w = clamp(est.vpip, 0.1, 0.9); return { combos: E.softRange(w, { ...o, minus: clamp(est.pfr * 0.6, 0.01, 0.25) }), label: `limped · ${Math.round(w * 100)}%` }; }
+        default: return { combos: null, label: 'any two' };
+      }
+    }
     switch (action) {
       case 'raise': return { combos: E.topRange(pfrW), label: `opened ${position} · top ${Math.round(pfrW * 100)}%` };
       case '3bet+': { const w = clamp(est.threeBet * 1.3, 0.02, 0.35); return { combos: E.topRange(w), label: `3-bet+ · top ${Math.round(w * 100)}%` }; }
@@ -74,12 +85,13 @@
    */
   function applyPostflop(villain, actions, board, est) {
     const af = est.af != null ? est.af : 1, f2b = est.f2b != null ? est.f2b : 0.4;
+    const RM = S.MODEL.rangeModel;
     const opts = {
-      bluffKeep: clamp(0.06 + 0.07 * af, 0.06, 0.45), floatKeep: clamp(0.75 - f2b, 0.1, 0.6) * 0.6,
-      valueShift: clamp(-0.05 * (af - 1), -0.12, 0.08), callShift: clamp((f2b - 0.40) * 0.6, -0.15, 0.15),
+      bluffKeep: clamp(RM.bluffBase + RM.bluffPerAf * af, RM.bluffBase, RM.bluffMax), floatKeep: clamp(0.75 - f2b, 0.1, 0.6) * RM.floatScale,
+      valueShift: clamp(-0.05 * (af - 1), -0.12, 0.08), callShift: clamp((f2b - 0.40) * 0.6, -0.15, 0.15), slowplay: RM.slowplay,
     };
     const LEN = { flop: 3, turn: 4, river: 5 };
-    const base = { flop: [0.55, 0.35], turn: [0.60, 0.40], river: [0.65, 0.45] };
+    const base = RM.base;
     let street = 'preflop', combos = villain.combos || E.allCombos(), narrowed = false;
     const history = [{ step: 'preflop', label: villain.label, combos: E.rangeSize(villain.combos) }];
     const warnings = [];
@@ -89,10 +101,11 @@
       const b = board.slice(0, LEN[street]);
       if (b.length < LEN[street]) continue;
       const [v0, c0] = base[street];
+      const kind = a.type === 'allin' ? (a.over ? 'raise' : 'bet') : a.type;  // an all-in into an unbet pot is a bet
       try {
-        combos = E.weightRange(combos, b, a.type, { ...opts, valueThr: v0 + opts.valueShift, callThr: c0 + opts.callShift });
+        combos = E.weightRange(combos, b, kind, { ...opts, valueThr: v0 + opts.valueShift, callThr: c0 + opts.callShift });
         narrowed = true;
-        history.push({ step: `${street} ${a.type}`, combos: Math.round(E.rangeSize(combos)) });
+        history.push({ step: `${street} ${kind}`, combos: Math.round(E.rangeSize(combos)) });
       } catch (e) {
         warnings.push(`${villain.name}: no holding fits "${a.type}" on the ${street} — kept the range from before it`);
       }
@@ -170,7 +183,8 @@
     const chips = (seat, to, allin) => {
       const had = put[seat] || 0;
       if (to <= had + 1e-9) return;
-      if (to > level + 1e-9) { actions.push({ type: allin ? 'allin' : (level > 0 || cur === 'preflop') ? 'raise' : 'bet', actor: name(seat), amount: to - had, to }); level = to; }
+      // over: did this raise someone? (an all-in into an unbet pot is a bet, not a raise)
+      if (to > level + 1e-9) { actions.push({ type: allin ? 'allin' : (level > 0 || cur === 'preflop') ? 'raise' : 'bet', actor: name(seat), amount: to - had, to, over: level > 0 && !(cur === 'preflop' && level <= t.bb) }); level = to; }
       else actions.push({ type: 'call', actor: name(seat), amount: to - had });
       put[seat] = to;
     };
@@ -183,18 +197,26 @@
       else if (a === 'BET' || a === 'RAISE' || a === 'ALL-IN') chips(0, Math.max(h.amount || 0, level), a === 'ALL-IN');
     };
     const order0 = () => actingOrder(allSeats.filter(x => x !== 0), t, cur);
+    // Checks aren't visible as chips: a live player who put nothing in on a street that ended unbet checked.
+    const checksFor = (liveSeats, st) => {
+      if (st === 'preflop') return;
+      for (const seat of actingOrder(allSeats.filter(x => x !== 0), t, st))
+        if (liveSeats.includes(seat) && !(put[seat] > 0)) actions.push({ type: 'check', actor: name(seat), inferred: true });
+    };
     let prevHero = null;
     for (let i = 0; i < snaps.length; i++) {
       const s = snaps[i];
       if (s.street !== cur) {
+        const liveNext = (s.live || []).map(Number);
         if (cur !== null) {
           heroAct(prevHero); // our last action on the street before
           // anyone still in on the new street must have matched the last bet of the old one
-          for (const seat of order0(s)) if ((s.live || []).map(Number).includes(seat) && (put[seat] || 0) < level - 1e-9) chips(seat, level, false);
+          for (const seat of order0(s)) if (liveNext.includes(seat) && (put[seat] || 0) < level - 1e-9) chips(seat, level, false);
+          if (level === 0) checksFor(liveNext, cur);  // the street went by unbet: everyone still in checked
         }
         else if (s.street !== 'preflop') startStreet('preflop');
-        // streets we never saw (everyone checked): just mark them
-        for (let j = STREETS.indexOf(cur) + 1; j < STREETS.indexOf(s.street); j++) startStreet(STREETS[j]);
+        // streets we never saw (everyone checked): mark them, with the checks
+        for (let j = STREETS.indexOf(cur) + 1; j < STREETS.indexOf(s.street); j++) { startStreet(STREETS[j]); checksFor(liveNext, STREETS[j]); }
         startStreet(s.street);
         prevHero = null;
       } else heroAct(prevHero);
@@ -203,6 +225,12 @@
       const order = actingOrder(allSeats.filter(x => x !== 0), t, s.street);
       const seq = order.map((seat, idx) => ({ seat, idx, b: Number((s.bets || {})[seat]) || 0 })).sort((x, y) => x.b - y.b || x.idx - y.idx);
       for (const { seat, b } of seq) chips(seat, b, s === current && stackOf(seat) === 0);
+      // on the street we're deciding on: players who act before us and have nothing in, while nobody has bet, checked
+      if (s === current && s.street !== 'preflop' && level === 0) {
+        const ord = actingOrder(allSeats, t, s.street), me = ord.indexOf(0);
+        for (const seat of ord.slice(0, me)) if ((s.live || []).map(Number).includes(seat) && !actions.some(a => a.type === 'check' && a.actor === name(seat) && a.inferred && a._st === s.street))
+          actions.push({ type: 'check', actor: name(seat), inferred: true, _st: s.street });
+      }
       prevHero = s.hero || null;
     }
     if (finalHero) heroAct(finalHero);
@@ -271,7 +299,10 @@
       const est = { ...PRIOR, ...(tracked || {}), ...((t.stats || {})[p.seat] || {}) };
       const pos = positionOf(p.seat, t);
       const r = villainRange(role[name(p.seat)], pos, est);
-      return applyPostflop({ name: name(p.seat), position: pos, stack: p.stack, bet: p.bet || 0, foldOverride: est.f2b, aggression: est.af,
+      const st = streetOf(board);
+      return applyPostflop({ name: name(p.seat), position: pos, stack: p.stack, bet: p.bet || 0,
+        // the fold rate for this street (flop/turn/river), and for facing a raise after they bet
+        foldOverride: est.f2bStreet && est.f2bStreet[st] != null ? est.f2bStreet[st] : est.f2b, foldToRaise: est.foldToRaise, aggression: est.af,
         type: est.type ? est.type.short : '?', hands: est.hands || 0, est, preflopRole: role[name(p.seat)] || 'none', ...r }, actions, E.parseCards(board), est);
     });
     return { actions, role, live, villains };
@@ -300,7 +331,8 @@
       ...(warnings.length ? { warnings } : {}),
       perceivedCombos: ctx.heroRange ? Math.round(E.rangeSize(ctx.heroRange)) : null,
       ranges: villains.map(v => ({ name: v.name, position: v.position, label: v.label, type: v.type, hands: v.hands,
-        combos: Math.round(E.rangeSize(v.combos)), steps: v.rangeHistory })) };
+        combos: Math.round(E.rangeSize(v.combos)), steps: v.rangeHistory,
+        ...(t.debugRanges ? { full: v.combos, est: { vpip: v.est && v.est.vpip, pfr: v.est && v.est.pfr, af: v.aggression, f2b: v.foldOverride, role: v.preflopRole } } : {}) })) };
   }
 
   // ── River solver (heads-up) ──
@@ -329,7 +361,7 @@
   function handToLog(hand, nextHeroStack) {
     const t = hand.table, d = hand.decision;
     const name = seat => nameOf(t, seat);
-    const log = [{ type: 'start', handId: String(hand.gameId) }];
+    const log = [{ type: 'start', handId: String(hand.gameId), size: tableSize(t) }];
     const acts = synthActions(t, d && HERO_ACTION[d.action] ? { action: d.action, amount: d.amount } : null);
     // folds between snapshots: live on an earlier street, gone by a later one
     const snaps = [...(t.history || []), { street: streetOf(t.board), live: t.players.filter(p => p.inHand).map(p => p.seat) }];
@@ -342,6 +374,12 @@
       const before = new Set((snaps[i - 1].live || []).map(Number)), after = new Set((snaps[i].live || []).map(Number));
       for (const seat of before) if (!after.has(seat)) (foldsAt[snaps[i - 1].street] = foldsAt[snaps[i - 1].street] || []).push(seat);
     }
+    // A blind whose preflop decision we never saw (we folded first and the hand ended for us) mustn't
+    // count as a hand they didn't play: drop their post, so the tracker doesn't credit them a hand.
+    const decided = new Set(acts.filter(a => !['post', 'street'].includes(a.type)).map(a => a.actor));
+    for (const st of Object.keys(foldsAt)) for (const seat of foldsAt[st]) decided.add(name(seat));
+    const heroSawFlop = snaps.some(x => x.street !== 'preflop');
+    if (!heroSawFlop) for (let i = acts.length - 1; i >= 0; i--) if (acts[i].type === 'post' && !decided.has(acts[i].actor)) acts.splice(i, 1);
     let street = 'preflop';
     const flushFolds = st => { for (const seat of foldsAt[st] || []) log.push({ type: 'fold', actor: name(seat) }); delete foldsAt[st]; };
     for (const a of acts) {
@@ -394,7 +432,8 @@
     function decide(t) {
       if (t.gameId != null && hand && String(hand.gameId) !== String(t.gameId)) finish(t.heroStack);
       t = { ...t, players: (t.players || []).map(p => ({ ...p, name: canonical(cleanName(p.name)) })) };
-      const d = decideFromTable(t, n => (/^Seat\d+$/.test(n) ? null : tracker.estimate(n)), { solver });
+      const size = tableSize(t);
+      const d = decideFromTable(t, n => (/^Seat\d+$/.test(n) ? null : tracker.estimate(n, { tableSize: size })), { solver });
       if (t.gameId != null) hand = { gameId: t.gameId, table: t, decision: d };
       return d;
     }

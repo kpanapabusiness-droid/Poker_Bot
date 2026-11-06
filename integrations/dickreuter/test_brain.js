@@ -13,14 +13,14 @@ const pre = { street: 'preflop', heroBet: 0, bets: { 1: 1, 2: 2, 3: 6, 4: 0, 5: 
 let t = base({ heroCards: ['AS', 'KS'], board: ['KD', '7C', '2H'], pot: 39, toCall: 0, heroStack: 182,
   players: seats(s => ({ inHand: s === 3 })), history: [pre] });
 let acts = B.synthActions(t);
-check('open, 3-bet and call attributed to the right players',
-  brief(acts) === 'Player1:post Player2:post Player3:raise6 Hero:raise18 Player3:call |flop', brief(acts));
+check('open, 3-bet and call attributed to the right players (and the caller, first to act, checked to us)',
+  brief(acts) === 'Player1:post Player2:post Player3:raise6 Hero:raise18 Player3:call |flop Player3:check', brief(acts));
 // villain bets into us on the turn after we checked the flop
 const flop = { street: 'flop', heroBet: 0, bets: { 3: 0 }, live: [3], hero: { action: 'CHECK', amount: 0 } };
 t = base({ heroCards: ['AS', 'KS'], board: ['KD', '7C', '2H', '9S'], pot: 59, toCall: 20, heroStack: 182,
   players: seats(s => ({ inHand: s === 3, bet: s === 3 ? 20 : 0 })), history: [pre, flop] });
 acts = B.synthActions(t);
-check('a checked street, then a bet on the next', brief(acts).endsWith('Player3:call |flop Hero:check |turn Player3:bet20'), brief(acts));
+check('a checked street (both checked), then a bet on the next', brief(acts).endsWith('Player3:call |flop Hero:check Player3:check |turn Player3:bet20'), brief(acts));
 check('no history: hero raise inferred from our chips', brief(B.synthActions(base({ heroCards: ['AS', 'KS'], board: [], pot: 30, toCall: 12, heroBet: 6,
   players: seats(s => ({ bet: s === 1 ? 1 : s === 2 ? 2 : s === 3 ? 18 : 0, inHand: [1, 2, 3].includes(s) })) }))).includes('Hero:raise6 Player3:raise18'));
 

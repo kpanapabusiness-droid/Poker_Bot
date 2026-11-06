@@ -38,6 +38,7 @@ class CoachDirect:
     def new_hand(self):
         self.game = f'{self.kind}{self.idx}-{next(_ids)}'
         self.hand_log = []
+        self.agg = []  # our bets/raises this hand: street, tag, estimated fold chance (outcome added by run_sim)
         self.layout = None
 
     def _embed(self, v):
@@ -79,6 +80,8 @@ class CoachDirect:
         return action
 
     def _decide(self, v):
+        bettor = max(range(1, v['n']), key=lambda k: v['bets'][k]) if v['to_call'] > 0 else None
+        street0 = v['street']
         v, away = self._embed(v)
         n = v['n']
         t = NS(mycards=list(v['hero_cards']), cardsOnTable=list(v['board']), total_players=n,
@@ -92,11 +95,29 @@ class CoachDirect:
         h = NS(GameID=self.game, round_number=1)
         p = NS(selected_strategy={'bigBlind': v['bb']})
         state = C.table_to_state(t, h, p)
+        dump = os.environ.get('POKER_COACH_DUMP')
+        if dump and street0 == 'river' and bettor is not None:
+            state['debugRanges'] = True
         d = self.brain.ask(state)
+        if dump and street0 == 'river' and bettor is not None and d.get('action') == 'FOLD' and len(v['in_hand']) == 2:
+            import json
+            with open(dump, 'a') as f:
+                deck, pos, n = getattr(self, '_sim_deal', (None, 0, 0))
+                real = deck[2 * ((pos + bettor) % n): 2 * ((pos + bettor) % n) + 2] if deck else None
+                f.write(json.dumps({'state': state, 'decision': {k: d.get(k) for k in ('action', 'equity', 'reason', 'ranges')},
+                                    'game': self.game, 'bettor_rel': bettor, 'bettor_cards': real,
+                                    'bettor_name': v['names'].get(bettor) if False else None}) + '\n')
         C.remember(state, d)
         self.last = d
         a = d.get('action')
         self.hand_log.append(f"{v['street'][0]}:{a}" + (f"/{d.get('tag')}" if d.get('tag') else ''))
+        if bettor is not None and v['board'] and a in ('CALL', 'FOLD', 'CHECK', 'RAISE', 'ALL-IN'):
+            need = v['to_call'] / (v['total_pot'] + v['to_call'])
+            self.agg.append({'street': street0, 'tag': 'FACE-' + ('FOLD' if a in ('FOLD', 'CHECK') else 'CALL' if a == 'CALL' else 'RAISE'),
+                             'eq': d.get('equity'), 'need': need, 'bettor': bettor, 'face': True, 'opps': len(v['in_hand']) - 1})
+        if a in ('BET', 'RAISE', 'ALL-IN') and v['board']:
+            self.agg.append({'street': v['street'], 'tag': d.get('tag') or a, 'fold_est': d.get('foldEst'),
+                             'pot': v['total_pot'], 'add': (d.get('amount') or 0) - v['bets'][0]})
         if a in ('FOLD', 'CHECK'):
             return ('check', 0) if v['to_call'] <= 0 else ('fold', 0)
         if a == 'CALL':

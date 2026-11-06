@@ -47,7 +47,10 @@
     exploit: { elastic: false, slopeBase: 0.05, slopeF2b: 0.5, overbets: [] },
     // Small bets get few folds: nobody folds a big share of hands for a cheap price. Folds are capped
     // at mdfCap × the share that "minimum defence" allows (bet / (pot + bet)). 0 = off.
-    mdfCap: 1.5,
+    // Off since 7 Nov: folds now come from the opponent's own range, and a capped, weak range should
+    // fold far more than "minimum defence" — the cap blocked that. (It was added for a hand that turned
+    // out to be a misread bet.)
+    mdfCap: 0,
     // Raising someone who bet: the hands that call a raise are a stronger slice of their range than a
     // straight "top (1 − fold)" cut. Equity when called is measured against this share of it. 1 = off.
     raiseCallShare: 0.6,
@@ -60,6 +63,14 @@
     // rising around an absolute strength threshold that goes up with the price (need = their call /
     // the pot after calling) and when they're facing a raise. off = the older population fold curve.
     rangeFolds: true,
+    // How opponents' ranges are narrowed by their own actions (brain.js applyPostflop):
+    // [value threshold, call threshold] within their range by street, bluff/float weights from aggression.
+    // preflop ranges for opponents: soft edge and a floor (0 = the old hard cut)
+    preflopSoft: { on: true, edge: 0.06, floor: 0.03 },
+    // Calibrated 7 Nov against the simulator's real hole cards: with these, the bettor's real hand sits at
+    // the 52nd percentile of the modelled river range (50 = unbiased; the old values put it at the 30th).
+    rangeModel: { base: { flop: [0.55, 0.25], turn: [0.58, 0.30], river: [0.60, 0.35] }, bluffBase: 0.12, bluffPerAf: 0.07, bluffMax: 0.45,
+                  floatScale: 1.0, slowplay: 0.25 },
     response: { base: { flop: 0.50, turn: 0.58, river: 0.64 }, priceSlope: 0.6, vsRaise: 0.06, f2bShift: 1.0, width: 0.04, drawCall: 0.9,
                 // perceived-range model: continue when equity vs what our bet represents > price + callBias + stickiness × (f2b − 0.4)
                 callBias: 0.0, stickiness: 0.8, eqWidth: 0.06, perceivedWeight: 0.5 },
@@ -245,7 +256,7 @@
     if (perceived && perceived.length && R.perceivedWeight > 0) {
       // Casual players mostly look at their own hand; better players weigh what our line represents.
       // perceivedWeight blends the two (0 = own hand only, 1 = our range only).
-      const pr = perceivedResponse(table, street, need, facingRaise ? null : f2b, perceived, board);
+      const pr = perceivedResponse(table, street, need, f2b == null ? null : f2b - (facingRaise ? 0.1 : 0), perceived, board);
       const k = R.perceivedWeight;
       if (k >= 1) return pr;
       const own = rangeResponse(table, absHS, street, need, facingRaise, f2b, null, board);
@@ -254,8 +265,9 @@
       for (const c of own.cont) if (!pr.cont.some(x => x[0] === c[0] && x[1] === c[1])) cont.push([c[0], c[1], (1 - k) * c[2]]);
       return { fold: (1 - k) * own.fold + k * pr.fold, cont: cont.filter(c => c[2] > 1e-6) };
     }
-    // fold-to-bet is measured when they face a bet; it says nothing about facing a raise after they bet
-    const sticky = facingRaise ? 0 : R.f2bShift * ((f2b ?? 0.4) - 0.4);
+    // f2b here is the stat for this situation: fold-to-bet when facing a bet, fold-to-raise when they bet
+    // and face our raise (centred on its own prior, 0.5). Unknown → no shift.
+    const sticky = f2b == null ? 0 : R.f2bShift * (f2b - (facingRaise ? 0.5 : 0.4));
     const thr = R.base[street] + R.priceSlope * (need - 0.25) + (facingRaise ? R.vsRaise : 0) + sticky;
     const drawCall = clamp(R.drawCall - 1.5 * (need - 0.2), 0.15, 0.95);
     let tw = 0, cw = 0;
@@ -431,7 +443,9 @@
     const resp = villains.map((v, i) => {
       const callAmt = Math.max(0, Math.min(totalTo - (v.bet || 0), v.stack != null ? v.stack : Infinity));
       const need = callAmt / (pot + add + callAmt);
-      return { callAmt, ...rangeResponse(tables[i], absHS, street, need, (v.bet || 0) > 0, v.foldOverride, perceived, board) };
+      // facing our raise after they bet, their own fold-to-raise is the relevant stat (not fold-to-bet)
+      const facingRaise = (v.bet || 0) > 0;
+      return { callAmt, ...rangeResponse(tables[i], absHS, street, need, facingRaise, facingRaise ? v.foldToRaise : v.foldOverride, perceived, board) };
     });
     // MDF bound: nobody folds far more than the price justifies to a small bet
     if (MODEL.mdfCap > 0) resp.forEach(r => { const cap = MODEL.mdfCap * r.callAmt / (pot + add); if (r.fold > cap) r.fold = cap; });

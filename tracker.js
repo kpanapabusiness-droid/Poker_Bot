@@ -27,18 +27,28 @@
   const PRIORS = {
     vpip: { p: 0.40, w: 12 }, pfr: { p: 0.12, w: 12 }, threeBet: { p: 0.05, w: 8 },
     af: { p: 1.5, w: 10 }, f2b: { p: 0.40, w: 10 }, wtsd: { p: 0.35, w: 10 },
+    // situational (7 Nov): each counted only where the player had the chance
+    fourBet: { p: 0.03, w: 8 }, foldTo3bet: { p: 0.55, w: 8 }, cbet: { p: 0.60, w: 8 }, foldToCbet: { p: 0.45, w: 8 },
+    f2bFlop: { p: 0.40, w: 8 }, f2bTurn: { p: 0.42, w: 8 }, f2bRiver: { p: 0.45, w: 8 }, foldToRaise: { p: 0.50, w: 8 },
   };
+  // counters added together hand by hand (opportunity, then success)
+  const COUNTS = ['fbOpp', 'fb', 'f3bOpp', 'f3b', 'cbetOpp', 'cbet', 'fcbOpp', 'fcb', 'ftrOpp', 'ftr',
+    'facedFlop', 'foldFlop', 'facedTurn', 'foldTurn', 'facedRiver', 'foldRiver', 'riverAggr', 'riverCalls'];
+  const sizeBand = n => (!n ? null : n <= 2 ? 'hu' : n <= 6 ? 'short' : 'full');
   const MAX_SHOWS = 12, MAX_PROCESSED = 3000;
 
   function emptyStats() {
-    return { hands: 0, vpip: 0, pfr: 0, tbOpp: 0, tb: 0, aggr: 0, calls: 0, facedBet: 0, foldToBet: 0, sawFlop: 0, wtsd: 0, shows: [], lastSeen: 0 };
+    const s = { hands: 0, vpip: 0, pfr: 0, tbOpp: 0, tb: 0, aggr: 0, calls: 0, facedBet: 0, foldToBet: 0, sawFlop: 0, wtsd: 0, shows: [], lastSeen: 0 };
+    for (const k of COUNTS) s[k] = 0;
+    s.bySize = {};
+    return s;
   }
 
   /** Split a full log (oldest first) into hands. A hand is complete once a later hand has started or a winner is posted. */
   function splitHands(log) {
     const hands = []; let cur = null;
     for (const a of log) {
-      if (a.type === 'start') { if (cur) cur.complete = true; cur = { handId: a.handId, actions: [], complete: false }; hands.push(cur); continue; }
+      if (a.type === 'start') { if (cur) cur.complete = true; cur = { handId: a.handId, size: a.size || null, actions: [], complete: false }; hands.push(cur); continue; }
       if (cur) { cur.actions.push(a); if (a.type === 'win') cur.won = true; }
     }
     hands.forEach(h => { if (h.won) h.complete = true; });
@@ -47,13 +57,17 @@
 
   /** Turn one completed hand's actions into per-player increments. Pure function (easy to test). */
   function analyseHand(actions) {
-    const P = {}; const get = n => (P[n] = P[n] || { dealt: true, vpip: false, pfr: false, tbOpp: false, tb: false, aggr: 0, calls: 0, facedBet: 0, foldToBet: 0, sawFlop: false, wtsd: false, foldedPre: false, shows: [] });
+    const P = {}; const get = n => (P[n] = P[n] || { dealt: true, vpip: false, pfr: false, tbOpp: false, tb: false, aggr: 0, calls: 0, facedBet: 0, foldToBet: 0, sawFlop: false, wtsd: false, foldedPre: false, shows: [],
+      ...Object.fromEntries(COUNTS.map(k => [k, 0])) });
+    let opener = null, pfRaiser = null, streetBettor = null, flopActed = new Set();
+    const betThisStreet = new Set();
+    const FACED = { flop: ['facedFlop', 'foldFlop'], turn: ['facedTurn', 'foldTurn'], river: ['facedRiver', 'foldRiver'] };
     const PLAYER_TYPES = new Set(['post', 'fold', 'check', 'call', 'bet', 'raise', 'allin', 'show', 'win']);
     let street = 'preflop', raises = 0, betOpen = false, lastRaiser = null;
     const pfAction = {};
     for (const a of actions) {
       if (a.type === 'street') {
-        street = a.street; betOpen = false;
+        street = a.street; betOpen = false; streetBettor = null; betThisStreet.clear();
         if (street === 'flop') Object.entries(P).forEach(([, s]) => { if (!s.foldedPre) s.sawFlop = true; });
         continue;
       }
@@ -61,17 +75,34 @@
       const s = get(a.actor);
       if (street === 'preflop') {
         if (a.type === 'post') continue;
-        const facingRaise = raises >= 1 && lastRaiser !== a.actor;
-        if (facingRaise) s.tbOpp = true;
+        const facing = lastRaiser !== a.actor;
+        // a 3-bet chance is facing exactly one raise; a 4-bet chance is facing a 3-bet
+        if (facing && raises === 1 && !s.tbOpp) s.tbOpp = true;
+        if (facing && raises === 2 && !s._fbSeen) { s.fbOpp++; s._fbSeen = true; }
+        if (raises === 2 && a.actor === opener && !s._f3Seen) { s.f3bOpp++; s._f3Seen = true; if (a.type === 'fold') s.f3b++; }
         if (a.type === 'call') { s.vpip = true; pfAction[a.actor] = pfAction[a.actor] || (raises ? 'call' : 'limp'); }
         if (a.type === 'raise' || a.type === 'bet' || a.type === 'allin') {
           s.vpip = true; s.pfr = true;
-          if (raises >= 1) s.tb = true;
+          if (raises === 1) s.tb = true;
+          if (raises === 2) s.fb++;
           raises++; lastRaiser = a.actor; pfAction[a.actor] = raises === 1 ? 'raise' : '3bet+';
+          if (raises === 1) opener = a.actor;
+          pfRaiser = a.actor;
         }
         if (a.type === 'fold') s.foldedPre = true;
       } else {
-        if (a.type === 'bet' || a.type === 'raise' || a.type === 'allin') { if (betOpen) s.facedBet++; s.aggr++; betOpen = true; }
+        const aggro = a.type === 'bet' || a.type === 'raise' || a.type === 'allin';
+        // c-bet: the preflop raiser's first flop action while nobody has bet
+        if (street === 'flop' && a.actor === pfRaiser && !flopActed.has(a.actor) && !betOpen) { s.cbetOpp++; if (aggro) s.cbet++; }
+        if (street === 'flop') flopActed.add(a.actor);
+        if (betOpen && a.actor !== streetBettor) {
+          const [fk, ok] = FACED[street] || [];
+          if (fk) { s[fk]++; if (a.type === 'fold') s[ok]++; }
+          if (street === 'flop' && streetBettor === pfRaiser) { s.fcbOpp++; if (a.type === 'fold') s.fcb++; }
+          if (betThisStreet.has(a.actor)) { s.ftrOpp++; if (a.type === 'fold') s.ftr++; }  // they bet, we raised
+        }
+        if (street === 'river') { if (aggro) s.riverAggr++; else if (a.type === 'call') s.riverCalls++; }
+        if (aggro) { if (betOpen) s.facedBet++; s.aggr++; betOpen = true; streetBettor = a.actor; betThisStreet.add(a.actor); }
         else if (a.type === 'call') { s.calls++; if (betOpen) s.facedBet++; }
         else if (a.type === 'fold') { if (betOpen) { s.facedBet++; s.foldToBet++; } }
       }
@@ -99,8 +130,15 @@
       for (const h of splitHands(log)) {
         if (!h.complete || !h.handId || processed.has(h.handId)) continue;
         const per = analyseHand(h.actions);
+        const band = sizeBand(h.size);
         for (const [name, x] of Object.entries(per)) {
           const s = db.players[name] = db.players[name] || emptyStats();
+          for (const k of COUNTS) s[k] = (s[k] || 0) + (x[k] || 0);
+          if (band) {  // the same few numbers by table size, for context-aware estimates
+            s.bySize = s.bySize || {};
+            const z = s.bySize[band] = s.bySize[band] || { hands: 0, vpip: 0, pfr: 0, facedBet: 0, foldToBet: 0 };
+            z.hands++; if (x.vpip) z.vpip++; if (x.pfr) z.pfr++; z.facedBet += x.facedBet; z.foldToBet += x.foldToBet;
+          }
           s.hands++; s.lastSeen = now();
           if (x.vpip) s.vpip++; if (x.pfr) s.pfr++; if (x.tbOpp) s.tbOpp++; if (x.tb) s.tb++;
           s.aggr += x.aggr; s.calls += x.calls; s.facedBet += x.facedBet; s.foldToBet += x.foldToBet;
@@ -116,8 +154,9 @@
     const shrink = (x, n, prior) => (x + prior.p * prior.w) / (n + prior.w);
 
     /** Shrunk estimates for one player (falls back to priors for strangers). */
-    function estimate(name) {
+    function estimate(name, ctx = {}) {
       const s = db.players[name] || emptyStats();
+      const c = k => s[k] || 0;
       const est = {
         hands: s.hands,
         vpip: shrink(s.vpip, s.hands, PRIORS.vpip),
@@ -126,9 +165,27 @@
         af: (s.aggr + PRIORS.af.p * PRIORS.af.w) / (s.calls + PRIORS.af.w),
         f2b: shrink(s.foldToBet, s.facedBet, PRIORS.f2b),
         wtsd: shrink(s.wtsd, s.sawFlop, PRIORS.wtsd),
+        fourBet: shrink(c('fb'), c('fbOpp'), PRIORS.fourBet),
+        foldTo3bet: shrink(c('f3b'), c('f3bOpp'), PRIORS.foldTo3bet),
+        cbet: shrink(c('cbet'), c('cbetOpp'), PRIORS.cbet),
+        foldToCbet: shrink(c('fcb'), c('fcbOpp'), PRIORS.foldToCbet),
+        foldToRaise: shrink(c('ftr'), c('ftrOpp'), PRIORS.foldToRaise),
         shows: s.shows.slice(-5),
         raw: s,
       };
+      // fold to a bet by street: shrunk toward the player's own overall fold-to-bet (not the population),
+      // so a few river hands don't override what we know about them
+      const byStreet = (f, n, pr) => (f + est.f2b * pr.w) / (n + pr.w);
+      est.f2bStreet = { flop: byStreet(c('foldFlop'), c('facedFlop'), PRIORS.f2bFlop), turn: byStreet(c('foldTurn'), c('facedTurn'), PRIORS.f2bTurn),
+        river: byStreet(c('foldRiver'), c('facedRiver'), PRIORS.f2bRiver) };
+      // at this table size: shrunk toward their overall numbers (hierarchical), when we have a few hands there
+      const band = sizeBand(ctx.tableSize), z = band && s.bySize && s.bySize[band];
+      if (z && z.hands) {
+        est.vpip = (z.vpip + est.vpip * 20) / (z.hands + 20);
+        est.pfr = (z.pfr + est.pfr * 20) / (z.hands + 20);
+        est.f2b = (z.foldToBet + est.f2b * 10) / (z.facedBet + 10);
+        est.sizeBand = band; est.sizeHands = z.hands;
+      }
       est.pfr = Math.min(est.pfr, est.vpip);
       est.type = classify(est);
       return est;

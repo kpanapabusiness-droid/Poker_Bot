@@ -420,6 +420,30 @@
     return out;
   }
   /** Effective number of combos in a (weighted) range. */
+  /**
+   * A soft preflop range: every hand gets a weight that falls smoothly from 1 around the top `pct` of
+   * hands (by the same ranking topRange uses), never below `floor` — real players sometimes play
+   * hands well outside their usual range, and a hard cut makes those hands impossible forever.
+   * minus: also take out the top `minus` share softly (e.g. hands that would have raised instead).
+   */
+  const _softCache = new Map();
+  function softRange(pct, { edge = 0.06, floor = 0.03, minus = 0 } = {}) {
+    const key = [pct, edge, floor, minus].map(x => x.toFixed(3)).join('|');
+    if (_softCache.has(key)) return _softCache.get(key);
+    const out = [];
+    let cum = 0;
+    for (const cls of HAND_RANKING) {
+      const combos = parseRange(cls);
+      const p = (cum + combos.length / 2) / 1326;  // this class's percentile
+      cum += combos.length;
+      let w = floor + (1 - floor) / (1 + Math.exp((p - pct) / edge));
+      if (minus > 0) w *= 1 - (1 - floor) / (1 + Math.exp((p - minus) / (edge / 2)));
+      for (const [a, b] of combos) out.push([a, b, w]);
+    }
+    if (_softCache.size > 200) _softCache.clear();
+    _softCache.set(key, out);
+    return out;
+  }
   const rangeSize = r => (r ? r.reduce((t, c) => t + (c.length > 2 ? c[2] : 1), 0) : 1326);
 
   // ────────────────────────────── 5. Odds ──────────────────────────────
@@ -601,7 +625,7 @@
     // ranges
     parseRange, rangePercent, inRange, handClass,
     // equity
-    equity, setSeed, strengthPercentiles, weightRange, rangeSize,
+    equity, setSeed, strengthPercentiles, weightRange, rangeSize, softRange,
     // odds
     potOdds, callEV, mdf, bluffBreakeven, spr, outsToEquity,
     // preflop

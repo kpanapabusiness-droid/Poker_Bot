@@ -86,5 +86,32 @@ check('Import restores players', t2.players().length === t.players().length);
 t2.reset();
 check('Reset clears everything', t2.players().length === 0);
 
+console.log('\nSituational stats count only real opportunities (7 Nov)');
+{
+  const t3 = T.create({});
+  const act = (type, actor, extra = {}) => ({ type, actor, ...extra });
+  const log = [];
+  // hand 1: Ann opens, Bob 3-bets, Ann folds (fold to 3-bet); Cy faced the 3-bet (a 4-bet chance, not a 3-bet chance)
+  log.push({ type: 'start', handId: 'h1', size: 6 }, act('raise', 'Ann'), act('raise', 'Bob'), act('fold', 'Cy'), act('fold', 'Ann'));
+  // hand 2: Ann opens, Bob calls; flop Ann c-bets, Bob folds (fold to c-bet, fold on the flop)
+  log.push({ type: 'start', handId: 'h2', size: 6 }, act('raise', 'Ann'), act('call', 'Bob'), { type: 'street', street: 'flop' }, act('bet', 'Ann'), act('fold', 'Bob'));
+  // hand 3: Bob opens, Ann calls; river Ann bets, Bob raises, Ann folds (fold to raise after betting)
+  log.push({ type: 'start', handId: 'h3', size: 2 }, act('raise', 'Bob'), act('call', 'Ann'), { type: 'street', street: 'flop' }, act('check', 'Ann'), act('check', 'Bob'),
+    { type: 'street', street: 'turn' }, act('check', 'Ann'), act('check', 'Bob'), { type: 'street', street: 'river' }, act('bet', 'Ann'), act('raise', 'Bob'), act('fold', 'Ann'));
+  log.push({ type: 'start', handId: 'h4' });
+  t3.ingest(log);
+  const ann = t3.estimate('Ann').raw, bob = t3.estimate('Bob').raw, cy = t3.estimate('Cy').raw;
+  check('fold to 3-bet: Ann had 1 chance and folded', ann.f3bOpp === 1 && ann.f3b === 1, ann);
+  check('3-bet: Bob had chances in hands 1 and 2, 3-bet once', bob.tbOpp === 2 && bob.tb === 1, bob);
+  check('facing a 3-bet is a 4-bet chance, not a 3-bet chance (Cy)', cy.fbOpp === 1 && cy.tbOpp === 0, cy);
+  check('c-bet: Ann had 1 chance and c-bet', ann.cbetOpp === 1 && ann.cbet === 1, ann);
+  check('fold to c-bet: Bob faced 1 and folded', bob.fcbOpp === 1 && bob.fcb === 1, bob);
+  check('fold to raise after betting: Ann 1 of 1', ann.ftrOpp === 1 && ann.ftr === 1, ann);
+  check('a checked-around street is no fold-to-bet chance', ann.facedFlop === 0 && ann.facedTurn === 0, ann);
+  const e = t3.estimate('Ann', { tableSize: 2 });
+  check('table-size estimate uses the heads-up hands, shrunk toward the overall numbers', e.sizeBand === 'hu' && e.sizeHands === 1, e.sizeBand);
+  check('estimates stay probabilities after shrinkage', ['fourBet', 'foldTo3bet', 'cbet', 'foldToCbet', 'foldToRaise'].every(k => e[k] > 0 && e[k] < 1) && e.f2bStreet.river > 0, e);
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);
