@@ -90,6 +90,15 @@ def main(repo):
         print(f"  patched: {os.path.relpath(so)}")
     else:
         print(f"  already patched: {os.path.relpath(so)}")
+    # Numbers: dickreuter read "$416,500" as 416.5 (it turned commas into decimal points, for
+    # European cents). Treat commas as thousands separators, and let the reader see them.
+    src = open(so, encoding='utf-8').read()
+    if 'poker-coach: thousands' not in src and "replace(',', '.')" in src:
+        src = src.replace("replace(',', '.')", "replace(',', '')")
+        src = src.replace('api.SetVariable("tessedit_char_whitelist", "0123456789.$£B")',
+                          'api.SetVariable("tessedit_char_whitelist", "0123456789.,$£B")  # poker-coach: thousands')
+        open(so, 'w', encoding='utf-8').write(src)
+        print(f"  patched: {os.path.relpath(so)} (thousands commas)")
     mm = os.path.join(pkg, 'tools', 'mouse_mover.py')
     patch(mm,
           "log = logging.getLogger(__name__)\n",

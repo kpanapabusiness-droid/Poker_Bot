@@ -130,6 +130,7 @@ if os.path.exists(os.path.join(dr, 'poker', 'main.py')):
         cf = open(os.path.join(tmp, 'poker', 'decisionmaker', 'curvefitting.py')).read()
         so = open(os.path.join(tmp, 'poker', 'tools', 'screen_operations.py')).read()
         mm = open(os.path.join(tmp, 'poker', 'tools', 'mouse_mover.py')).read()
+        check('"$416,500" reads as 416500, not 416.5', "replace(',', '.')" not in so and "replace(',', '')" in so)
         check('screenshots cover every monitor, clicks shifted to match', 'ImageGrab.grab()' not in so and so.count('all_screens=True') >= 1 and '_screen_origin()' in mm)
         check('lmfit crash fixed', 'poker-coach: lmfit 1.3 fix' in cf)
         check('fast fold off and screenshot server off', "poker-coach: fast fold off" in main and 'poker-coach: screenshot web server' in main and 't2.start()' not in main)
