@@ -77,6 +77,38 @@ def main(repo):
           '        yf = np.array([bigBlind, maxValue], dtype=float)\n',
           'poker-coach: lmfit 1.3 fix')
 
+    # Screenshots: dickreuter only grabbed the main monitor. Grab every monitor, and shift mouse
+    # clicks by the same amount (an all-monitor picture starts at the far top-left monitor's corner).
+    so = os.path.join(pkg, 'tools', 'screen_operations.py')
+    src = open(so, encoding='utf-8').read()
+    if 'poker-coach: all monitors' not in src:
+        if 'ImageGrab.grab()' not in src:
+            sys.exit(f"Couldn't find ImageGrab.grab() in {so}; dickreuter may have changed.")
+        if not os.path.exists(so + '.orig'):
+            shutil.copy(so, so + '.orig')
+        open(so, 'w', encoding='utf-8').write(src.replace('ImageGrab.grab()', 'ImageGrab.grab(all_screens=True)  # poker-coach: all monitors'))
+        print(f"  patched: {os.path.relpath(so)}")
+    else:
+        print(f"  already patched: {os.path.relpath(so)}")
+    mm = os.path.join(pkg, 'tools', 'mouse_mover.py')
+    patch(mm,
+          "log = logging.getLogger(__name__)\n",
+          "log = logging.getLogger(__name__)\n\n\n"
+          "def _screen_origin():  # poker-coach: all monitors\n"
+          "    \"\"\"Top-left of the whole desktop (negative when a monitor sits left of / above the main one).\"\"\"\n"
+          "    try:\n"
+          "        import ctypes\n"
+          "        return ctypes.windll.user32.GetSystemMetrics(76), ctypes.windll.user32.GetSystemMetrics(77)\n"
+          "    except Exception:\n"
+          "        return 0, 0\n",
+          "def _screen_origin():  # poker-coach: all monitors")
+    patch(mm,
+          "        log.debug(f\"Target position: {x1} {y1} {x2} {y2}\")\n",
+          "        ox, oy = _screen_origin()  # poker-coach: screenshot coordinates -> screen coordinates\n"
+          "        x1, y1, x2, y2 = x1 + ox, y1 + oy, x2 + ox, y2 + oy\n"
+          "        log.debug(f\"Target position: {x1} {y1} {x2} {y2}\")\n",
+          "poker-coach: screenshot coordinates -> screen coordinates")
+
     sh = os.path.join(pkg, 'tools', 'strategy_handler.py')
     patch(sh,
           "        if 'collusion' not in self.selected_strategy:\n            self.selected_strategy['collusion'] = 1\n",
