@@ -102,6 +102,31 @@ def main(repo):
                           'api.SetVariable("tessedit_char_whitelist", "0123456789.,$£B")  # poker-coach: thousands')
         open(so, 'w', encoding='utf-8').write(src)
         print(f"  patched: {os.path.relpath(so)} (thousands commas)")
+    # Button text on some sites (Torn) is centred, so its anti-aliasing shifts a little with the label
+    # width ("CALL $1K" vs "CALL $3K") and the exact 0.01 match misses. A table can set
+    # button_threshold (e.g. 0.03) to loosen the match for the action buttons only.
+    patch(so,
+          "def check_if_image_in_range(img, screenshot, x1, y1, x2, y2, extended=False):\n"
+          "    cropped_screenshot = screenshot.crop((x1, y1, x2, y2))\n"
+          "    cropped_screenshot = pil_to_cv2(cropped_screenshot)\n"
+          "    count, _, _, _ = find_template_on_screen(\n"
+          "        img, cropped_screenshot, 0.01, extended=extended)\n",
+          "def check_if_image_in_range(img, screenshot, x1, y1, x2, y2, extended=False, threshold=0.01):  # poker-coach: button threshold\n"
+          "    cropped_screenshot = screenshot.crop((x1, y1, x2, y2))\n"
+          "    cropped_screenshot = pil_to_cv2(cropped_screenshot)\n"
+          "    count, _, _, _ = find_template_on_screen(\n"
+          "        img, cropped_screenshot, threshold, extended=extended)\n",
+          "poker-coach: button threshold")
+    patch(so,
+          "        is_in_range = check_if_image_in_range(template_cv2, screenshot,\n"
+          "                                              search_area['x1'], search_area['y1'], search_area['x2'], search_area['y2'],\n"
+          "                                              extended=extended)\n",
+          "        threshold = float(table_dict.get('button_threshold', 0.01)) if image_area == 'buttons_search_area' else 0.01  # poker-coach: per-table button threshold\n"
+          "        is_in_range = check_if_image_in_range(template_cv2, screenshot,\n"
+          "                                              search_area['x1'], search_area['y1'], search_area['x2'], search_area['y2'],\n"
+          "                                              extended=extended, threshold=threshold)\n",
+          "poker-coach: per-table button threshold")
+
     mm = os.path.join(pkg, 'tools', 'mouse_mover.py')
     # mouse_mover patched by an older version of this installer: start again from dickreuter's original
     _mm_src = open(mm, encoding='utf-8').read()
