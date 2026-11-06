@@ -168,21 +168,40 @@ def idle_move(x, y, seconds_since_last_call=1.0):
     return int(x + d * math.cos(a)), int(y + d * math.sin(a))
 
 
-# ── exact bet amounts typed into the site's amount box ──
+# ── bet sizes: a preset button, a tidy typed number, or whatever number came to mind ──
 
-def bet_amount(target, bb, lo=None, hi=None):
-    """A person types tidy numbers: round the coach's size to whole big blinds, and often to a
-    rounder figure (5 BB steps, or two significant digits), staying between lo and hi."""
+SETTINGS.update({
+    'bet_preset_chance': 0.35,   # use a preset button (1/2, 3/4, 3BB, Pot) when one is close enough
+    'bet_preset_close': 0.18,    # ...within 18% of the size the coach wants
+    'bet_round_chance': 0.6,     # of typed bets: tidy number (else an untidy one like 45,555)
+    'typo_chance': 0.04,         # mistype a digit, notice, backspace, fix it
+})
+
+
+def bet_amount(target, bb, lo=None, hi=None, tidy=None):
+    """A typed size. tidy=True: round like a person (5 BB steps, or two significant digits, or whole
+    BBs); tidy=False: near the coach's size but untidy (45,555); None: pick by bet_round_chance."""
     bb = float(bb or 0) or 1.0
     t = float(target)
-    r = random.random()
-    if r < 0.45 and t >= 10 * bb:
-        step = 5 * bb
-    elif r < 0.65 and t >= 1000:
-        step = 10 ** (len(str(int(t))) - 2)  # 2 significant digits: 36,400 → 36,000
+    if tidy is None:
+        tidy = random.random() < SETTINGS['bet_round_chance']
+    if tidy:
+        r = random.random()
+        if r < 0.4 and t >= 10 * bb:
+            step = 5 * bb
+        elif r < 0.75 and t >= 1000:
+            step = 10 ** (len(str(int(t))) - 2)  # 2 significant digits: 36,400 → 36,000
+        else:
+            step = bb
+        v = max(step, round(t / step) * step)
     else:
-        step = bb
-    v = max(step, round(t / step) * step)
+        v = t * random.uniform(0.96, 1.04)
+        digits = str(int(v))
+        if random.random() < 0.5 and len(digits) >= 4:  # people mash a repeated digit: 45,555 / 38,888
+            keep = max(2, len(digits) - random.randint(2, 3))
+            mashed = int(digits[:keep] + digits[keep - 1] * (len(digits) - keep))
+            if abs(mashed - v) <= 0.06 * v:
+                v = mashed
     if lo is not None:
         v = max(v, float(lo))
     if hi is not None:
@@ -190,25 +209,49 @@ def bet_amount(target, bb, lo=None, hi=None):
     return int(round(v))
 
 
+def bet_plan(target, bb, lo, hi, presets):
+    """How to make this bet. presets: {'1/2': value, '3/4': value, ...} that the table's buttons
+    would set right now. Returns {'how': 'preset', 'preset': name, 'amount': value} or
+    {'how': 'type', 'amount': n}."""
+    t = float(target)
+    close = {k: v for k, v in (presets or {}).items()
+             if v and lo <= v <= hi and abs(v - t) / max(t, 1.0) <= SETTINGS['bet_preset_close']}
+    if close and random.random() < SETTINGS['bet_preset_chance']:
+        name = min(close, key=lambda k: abs(close[k] - t))
+        return {'how': 'preset', 'preset': name, 'amount': int(close[name])}
+    return {'how': 'type', 'amount': bet_amount(t, bb, lo, hi)}
+
+
 def type_amount(amount):
-    """Select what's in the focused box and type the amount, key by key, at typing speed (Windows)."""
+    """Select what's in the focused box and type the amount key by key at typing speed, now and
+    then hitting a wrong digit and correcting it (Windows)."""
     import ctypes
     import time
     user32 = ctypes.windll.user32
     KEYUP = 0x0002
+    BACKSPACE, CTRL, A = 0x08, 0x11, 0x41
 
-    def tap(vk, hold=None):
+    def tap(vk):
         user32.keybd_event(vk, 0, 0, 0)
-        time.sleep(hold if hold is not None else random.uniform(0.03, 0.09))
+        time.sleep(random.uniform(0.03, 0.09))
         user32.keybd_event(vk, 0, KEYUP, 0)
 
-    user32.keybd_event(0x11, 0, 0, 0)          # Ctrl down
+    user32.keybd_event(CTRL, 0, 0, 0)
     time.sleep(random.uniform(0.04, 0.1))
-    tap(0x41)                                  # A: select all
+    tap(A)                                     # select all
     time.sleep(random.uniform(0.02, 0.06))
-    user32.keybd_event(0x11, 0, KEYUP, 0)      # Ctrl up
+    user32.keybd_event(CTRL, 0, KEYUP, 0)
     time.sleep(random.uniform(0.08, 0.25))
-    for ch in str(int(amount)):
+    digits = str(int(amount))
+    for i, ch in enumerate(digits):
+        if i and random.random() < SETTINGS['typo_chance']:
+            wrong = random.choice([d for d in '0123456789' if d != ch])
+            tap(0x30 + int(wrong))
+            time.sleep(random.uniform(0.25, 0.7))  # notice it
+            tap(BACKSPACE)
+            time.sleep(random.uniform(0.1, 0.3))
         tap(0x30 + int(ch))
-        time.sleep(random.uniform(0.05, 0.2))
+        # a short burst for repeated digits, a beat between groups of three
+        same = i and digits[i - 1] == ch
+        time.sleep(random.uniform(0.04, 0.12) if same else random.uniform(0.07, 0.22))
     time.sleep(random.uniform(0.15, 0.5))      # glance at what you typed

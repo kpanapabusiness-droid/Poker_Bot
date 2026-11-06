@@ -130,7 +130,8 @@ def main(repo):
     mm = os.path.join(pkg, 'tools', 'mouse_mover.py')
     # mouse_mover patched by an older version of this installer: start again from dickreuter's original
     _mm_src = open(mm, encoding='utf-8').read()
-    if os.path.exists(mm + '.orig') and 'poker-coach' in _mm_src and 'humanize v2' not in _mm_src:
+    if os.path.exists(mm + '.orig') and 'poker-coach' in _mm_src and ('humanize v2' not in _mm_src or
+            ('exact bet' in _mm_src and 'exact bet v2' not in _mm_src)):
         shutil.copy(mm + '.orig', mm)
     patch(mm,
           "log = logging.getLogger(__name__)\n",
@@ -334,21 +335,35 @@ def main(repo):
     # Used when the table maps mouse_bet_amount; otherwise the coach picks the nearest preset.
     patch(mm,
           '        elif decision == "Bet":\n',
-          '        elif decision == "Bet exact":  # poker-coach: exact bet\n'
+          '        elif decision == "Bet exact":  # poker-coach: exact bet v2\n'
           '            from poker.tools import humanize\n'
-          "            coo = self.table_dict['mouse_bet_amount']\n"
-          "            self.take_action(coo['x1'] + tlx, coo['y1'] + tly, coo['x2'] + tlx, coo['y2'] + tly)\n"
-          "            humanize.type_amount((options or {}).get('amount', 0))\n"
+          "            plan = (options or {}).get('plan') or {'how': 'type', 'amount': (options or {}).get('amount', 0)}\n"
+          "            street = (options or {}).get('street', 'postflop')\n"
+          "            preset = ((self.table_dict.get('bet_presets') or {}).get(street) or {}).get(plan.get('preset'))\n"
+          "            if plan['how'] == 'preset' and preset:\n"
+          "                coo = self.table_dict[preset]\n"
+          "                self.take_action(coo['x1'] + tlx, coo['y1'] + tly, coo['x2'] + tlx, coo['y2'] + tly)\n"
+          "            else:\n"
+          "                coo = self.table_dict['mouse_bet_amount']\n"
+          "                self.take_action(coo['x1'] + tlx, coo['y1'] + tly, coo['x2'] + tlx, coo['y2'] + tly)\n"
+          "                humanize.type_amount(plan['amount'])\n"
           "            coo = self.table_dict['mouse_raise']\n"
           "            self.take_action(coo['x1'] + tlx, coo['y1'] + tly, coo['x2'] + tlx, coo['y2'] + tly)\n\n"
           '        elif decision == "Bet":\n',
-          "poker-coach: exact bet")
+          "poker-coach: exact bet v2")
+    _src = open(main_py, encoding='utf-8').read()  # drop the first version of this patch
+    _v1 = ("                elif mouse_target == 'Bet exact':  # poker-coach: exact bet\n"
+           "                    action_options['amount'] = getattr(d, 'bet_amount', 0)\n")
+    if _v1 in _src:
+        open(main_py, 'w', encoding='utf-8').write(_src.replace(_v1, ''))
     patch(main_py,
           "                elif mouse_target == 'BetPlus':\n",
-          "                elif mouse_target == 'Bet exact':  # poker-coach: exact bet\n"
+          "                elif mouse_target == 'Bet exact':  # poker-coach: exact bet v2\n"
           "                    action_options['amount'] = getattr(d, 'bet_amount', 0)\n"
+          "                    action_options['plan'] = getattr(d, 'bet_plan', None)\n"
+          "                    action_options['street'] = 'preflop' if table.gameStage == 'PreFlop' else 'postflop'\n"
           "                elif mouse_target == 'BetPlus':\n",
-          "poker-coach: exact bet")
+          "poker-coach: exact bet v2")
     # Think before acting, like a person: how long depends on how hard the spot is (humanize.think_time)
     patch(main_py,
           "                if self.gui_signals.ui.auto_act.isChecked():\n"

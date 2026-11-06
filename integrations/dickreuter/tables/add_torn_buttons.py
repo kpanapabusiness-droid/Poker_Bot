@@ -33,6 +33,8 @@ MOUSE = {                                  # where to click (only used with "Act
     'mouse_full_pot': (377, 610, 395, 625),  # "Pot" preset
     'mouse_all_in': (413, 610, 435, 625),    # "Max" preset
     'mouse_increase': (640, 610, 650, 625),  # "+" next to the amount
+    'mouse_slot2': (301, 610, 316, 625),     # 2nd preset: "3BB" preflop, "1/2" after the flop
+    'mouse_slot3': (340, 610, 355, 625),     # 3rd preset: "1/2" preflop, "3/4" after the flop
     'mouse_bet_amount': (505, 608, 595, 628),  # the amount box: click, type the size, then Raise/Bet
     'mouse_call2': (175, 652, 275, 680),     # ALL-IN when calling means all-in (left of the bar in both layouts)
 }
@@ -85,6 +87,9 @@ def main():
     for key, b in MOUSE.items():
         t[key] = box(b)
     t['buttons_search_area'] = box(BAR)
+    # what each preset button is called on each street (the coach works out what size it makes)
+    t['bet_presets'] = {'preflop': {'3BB': 'mouse_slot2', '1/2': 'mouse_slot3', 'Pot': 'mouse_full_pot'},
+                        'postflop': {'1/2': 'mouse_slot2', '3/4': 'mouse_slot3', 'Pot': 'mouse_full_pot'}}
     t['button_threshold'] = THRESHOLD
     t['lost_everything_search_area'] = box(BAR)
     json.dump(t, open(o.table, 'w'))

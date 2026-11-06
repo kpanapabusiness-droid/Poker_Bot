@@ -335,16 +335,28 @@ def to_button(d, state, t=None):
 
 
 def exact_bet(d, state, t=None):
-    """The "raise to" total to type: the coach's size, rounded the way a person would, kept between
-    the minimum raise and all-in."""
+    """How to make the coach's bet like a person would: sometimes a preset button (½ pot, ¾ pot, 3BB,
+    pot) if one is close, otherwise type a tidy or untidy number; always between the minimum raise
+    and all-in. Returns humanize.bet_plan's dict."""
     try:
         from poker.tools import humanize
     except ImportError:
         import humanize
-    already, call = state['heroBet'], state['toCall']
+    already, call, pot, bb = state['heroBet'], state['toCall'], state['pot'], state['bb']
     min_to = _num(getattr(t, 'minBet', 0)) if t is not None else 0
-    min_to = min_to or max(already + call * 2, state['bb'])
-    return humanize.bet_amount(d.get('amount', 0), state['bb'], lo=min_to, hi=state['heroStack'] + already)
+    min_to = min_to or max(already + call * 2, bb)
+    hi = state['heroStack'] + already
+    td = getattr(t, 'table_dict', None) or {}
+    street = 'preflop' if not state.get('board') else 'postflop'
+    presets = {}
+    after_call = pot + call  # what the pot would be once we've called
+    sizes = {'1/2': 0.5, '3/4': 0.75, 'Pot': 1.0}
+    for name in (td.get('bet_presets') or {}).get(street, {}):
+        if name in sizes:
+            presets[name] = already + call + sizes[name] * after_call
+        elif name.upper().endswith('BB') and name[:-2].isdigit():
+            presets[name] = int(name[:-2]) * bb
+    return humanize.bet_plan(d.get('amount', 0), bb, min_to, hi, presets)
 
 
 # One row per decision, kept on your PC. report.py joins it with the hand results.
@@ -400,7 +412,9 @@ class CoachDecision(Decision):
             self.coach_state = state  # for humanize.think_time
             self.decision = to_button(d, state, t)
             if self.decision == 'Bet exact':
-                self.bet_amount = exact_bet(d, state, t)
+                self.bet_plan = exact_bet(d, state, t)
+                self.bet_amount = self.bet_plan['amount']
+                log.info("Bet plan: %s", self.bet_plan)
             t.currentBluff = 1 if d.get('tag') in ('BLUFF', 'SEMI-BLUFF') else 0
             log.info("Coach: %s [%s] - %s -> button %s", *(_ascii(v) for v in (d.get('text'), d.get('tag'), d.get('reason'), self.decision)))
             log_decision(state, d, self.decision, getattr(h, 'GameID', ''))
