@@ -330,6 +330,25 @@ def main(repo):
           "                log.warning('Moving mouse away failed')\n"
           "        return\n",
           "poker-coach: humanize after-action")
+    # Exact bet sizes: click the amount box, type the coach's (rounded) size, then press Raise/Bet.
+    # Used when the table maps mouse_bet_amount; otherwise the coach picks the nearest preset.
+    patch(mm,
+          '        elif decision == "Bet":\n',
+          '        elif decision == "Bet exact":  # poker-coach: exact bet\n'
+          '            from poker.tools import humanize\n'
+          "            coo = self.table_dict['mouse_bet_amount']\n"
+          "            self.take_action(coo['x1'] + tlx, coo['y1'] + tly, coo['x2'] + tlx, coo['y2'] + tly)\n"
+          "            humanize.type_amount((options or {}).get('amount', 0))\n"
+          "            coo = self.table_dict['mouse_raise']\n"
+          "            self.take_action(coo['x1'] + tlx, coo['y1'] + tly, coo['x2'] + tlx, coo['y2'] + tly)\n\n"
+          '        elif decision == "Bet":\n',
+          "poker-coach: exact bet")
+    patch(main_py,
+          "                elif mouse_target == 'BetPlus':\n",
+          "                elif mouse_target == 'Bet exact':  # poker-coach: exact bet\n"
+          "                    action_options['amount'] = getattr(d, 'bet_amount', 0)\n"
+          "                elif mouse_target == 'BetPlus':\n",
+          "poker-coach: exact bet")
     # Think before acting, like a person: how long depends on how hard the spot is (humanize.think_time)
     patch(main_py,
           "                if self.gui_signals.ui.auto_act.isChecked():\n"

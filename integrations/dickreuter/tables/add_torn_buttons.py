@@ -33,6 +33,7 @@ MOUSE = {                                  # where to click (only used with "Act
     'mouse_full_pot': (377, 610, 395, 625),  # "Pot" preset
     'mouse_all_in': (413, 610, 435, 625),    # "Max" preset
     'mouse_increase': (640, 610, 650, 625),  # "+" next to the amount
+    'mouse_bet_amount': (505, 608, 595, 628),  # the amount box: click, type the size, then Raise/Bet
     'mouse_call2': (175, 652, 275, 680),     # ALL-IN when calling means all-in (left of the bar in both layouts)
 }
 THRESHOLD = 0.03                           # present buttons score <= 0.015, absent ones >= 0.045

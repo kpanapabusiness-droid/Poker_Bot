@@ -166,3 +166,49 @@ def idle_move(x, y, seconds_since_last_call=1.0):
     d = random.uniform(*SETTINGS['idle_drift_px'])
     a = random.uniform(0, 2 * math.pi)
     return int(x + d * math.cos(a)), int(y + d * math.sin(a))
+
+
+# ── exact bet amounts typed into the site's amount box ──
+
+def bet_amount(target, bb, lo=None, hi=None):
+    """A person types tidy numbers: round the coach's size to whole big blinds, and often to a
+    rounder figure (5 BB steps, or two significant digits), staying between lo and hi."""
+    bb = float(bb or 0) or 1.0
+    t = float(target)
+    r = random.random()
+    if r < 0.45 and t >= 10 * bb:
+        step = 5 * bb
+    elif r < 0.65 and t >= 1000:
+        step = 10 ** (len(str(int(t))) - 2)  # 2 significant digits: 36,400 → 36,000
+    else:
+        step = bb
+    v = max(step, round(t / step) * step)
+    if lo is not None:
+        v = max(v, float(lo))
+    if hi is not None:
+        v = min(v, float(hi))
+    return int(round(v))
+
+
+def type_amount(amount):
+    """Select what's in the focused box and type the amount, key by key, at typing speed (Windows)."""
+    import ctypes
+    import time
+    user32 = ctypes.windll.user32
+    KEYUP = 0x0002
+
+    def tap(vk, hold=None):
+        user32.keybd_event(vk, 0, 0, 0)
+        time.sleep(hold if hold is not None else random.uniform(0.03, 0.09))
+        user32.keybd_event(vk, 0, KEYUP, 0)
+
+    user32.keybd_event(0x11, 0, 0, 0)          # Ctrl down
+    time.sleep(random.uniform(0.04, 0.1))
+    tap(0x41)                                  # A: select all
+    time.sleep(random.uniform(0.02, 0.06))
+    user32.keybd_event(0x11, 0, KEYUP, 0)      # Ctrl up
+    time.sleep(random.uniform(0.08, 0.25))
+    for ch in str(int(amount)):
+        tap(0x30 + int(ch))
+        time.sleep(random.uniform(0.05, 0.2))
+    time.sleep(random.uniform(0.15, 0.5))      # glance at what you typed

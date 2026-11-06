@@ -316,7 +316,10 @@ def to_button(d, state, t=None):
     if action == 'ALL-IN':
         return 'Bet max' if has_all_in else 'Bet pot'
 
-    # BET / RAISE: pick the closest size this table's buttons can make (sizes are "raise to" totals).
+    # BET / RAISE: tables with an amount box (mouse_bet_amount) get the exact size typed in;
+    # otherwise pick the closest size this table's buttons can make (sizes are "raise to" totals).
+    if td is not None and 'mouse_bet_amount' in td:
+        return 'Bet exact'
     target = float(d.get('amount', 0))
     pot, call, already = state['pot'], state['toCall'], state['heroBet']
     min_to = _num(getattr(t, 'minBet', 0)) if t is not None else 0
@@ -329,6 +332,19 @@ def to_button(d, state, t=None):
     if has_all_in:
         choices['Bet max'] = state['heroStack'] + already
     return min(choices, key=lambda k: abs(math.log(max(choices[k], 1e-6) / max(target, 1e-6))))
+
+
+def exact_bet(d, state, t=None):
+    """The "raise to" total to type: the coach's size, rounded the way a person would, kept between
+    the minimum raise and all-in."""
+    try:
+        from poker.tools import humanize
+    except ImportError:
+        import humanize
+    already, call = state['heroBet'], state['toCall']
+    min_to = _num(getattr(t, 'minBet', 0)) if t is not None else 0
+    min_to = min_to or max(already + call * 2, state['bb'])
+    return humanize.bet_amount(d.get('amount', 0), state['bb'], lo=min_to, hi=state['heroStack'] + already)
 
 
 # One row per decision, kept on your PC. report.py joins it with the hand results.
@@ -383,6 +399,8 @@ class CoachDecision(Decision):
             self.coach = d
             self.coach_state = state  # for humanize.think_time
             self.decision = to_button(d, state, t)
+            if self.decision == 'Bet exact':
+                self.bet_amount = exact_bet(d, state, t)
             t.currentBluff = 1 if d.get('tag') in ('BLUFF', 'SEMI-BLUFF') else 0
             log.info("Coach: %s [%s] - %s -> button %s", *(_ascii(v) for v in (d.get('text'), d.get('tag'), d.get('reason'), self.decision)))
             log_decision(state, d, self.decision, getattr(h, 'GameID', ''))
