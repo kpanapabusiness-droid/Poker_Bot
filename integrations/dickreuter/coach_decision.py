@@ -365,6 +365,11 @@ def log_decision(state, d, button, game_id):
         log.warning("couldn't write the decision log: %s", e)
 
 
+def _ascii(v):
+    """The Windows console can't print every character; keep log lines plain."""
+    return str(v).replace('\u2014', '-').replace('\u2192', '->').encode('ascii', 'replace').decode('ascii')
+
+
 class CoachDecision(Decision):
     """Drop-in replacement for dickreuter's Decision: same constructor, same attributes."""
 
@@ -378,7 +383,7 @@ class CoachDecision(Decision):
             self.coach = d
             self.decision = to_button(d, state, t)
             t.currentBluff = 1 if d.get('tag') in ('BLUFF', 'SEMI-BLUFF') else 0
-            log.info("Coach: %s [%s] — %s → button %s", d.get('text'), d.get('tag'), d.get('reason'), self.decision)
+            log.info("Coach: %s [%s] - %s -> button %s", *(_ascii(v) for v in (d.get('text'), d.get('tag'), d.get('reason'), self.decision)))
             log_decision(state, d, self.decision, getattr(h, 'GameID', ''))
         except Exception as e:  # never stall the bot: use dickreuter's own logic for this one
             log.warning("Coach brain failed (%s); using dickreuter's decision", e)

@@ -264,6 +264,16 @@ def main(repo):
         else:
             print(f"  already patched: {os.path.relpath(path)}")
 
+    # dickreuter saves a screenshot per decision into log/screenshots but never creates the folder
+    patch(main_py,
+          '                pil_image.save("log/screenshots/" + filename)\n',
+          '                try:  # poker-coach: screenshots folder\n'
+          '                    __import__("os").makedirs("log/screenshots", exist_ok=True)\n'
+          '                    pil_image.save("log/screenshots/" + filename)\n'
+          '                except Exception as e:\n'
+          '                    log.warning(f"Could not save screenshot: {e}")\n',
+          'poker-coach: screenshots folder')
+
     os.environ.setdefault('POKER_COACH_BRAIN', os.path.join(HERE, 'brain.js'))
     print(f"\nDone. Before running dickreuter, set:\n  POKER_COACH_BRAIN={os.path.join(HERE, 'brain.js')}\n"
           "and make sure `node` is on your PATH. Untick auto-act to see each decision before it's played.")
