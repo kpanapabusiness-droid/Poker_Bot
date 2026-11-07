@@ -158,18 +158,33 @@ def _suit_from_colour(card, ink):
     return max(votes, key=votes.get)
 
 
-def _isolate(mask, first):
+def _runs(flags, min_len=1, gap=0):
+    """(start, end) runs of True in flags; runs separated by <= gap False entries are joined."""
+    idx = np.where(flags)[0]
+    if not len(idx):
+        return []
+    runs, s, prev = [], idx[0], idx[0]
+    for i in idx[1:]:
+        if i - prev > gap + 1:
+            runs.append((s, prev + 1))
+            s = i
+        prev = i
+    runs.append((s, prev + 1))
+    return [r for r in runs if r[1] - r[0] >= min_len]
+
+
+def _isolate(mask, first, split=False):
     """Keep just the rank glyph: the first (hand: top) or last (board: bottom) band of ink rows,
-    so the suit symbol printed next to it doesn't confuse the OCR. Cropped to its ink."""
-    rows = mask.any(axis=1)
-    runs, start = [], None
-    for i, r in enumerate(list(rows) + [False]):
-        if r and start is None:
-            start = i
-        elif not r and start is not None:
-            if i - start >= 4:
-                runs.append((start, i))
-            start = None
+    so the suit symbol printed next to it doesn't confuse the OCR. Cropped to its ink.
+    With split (the fallback pass), it first keeps the leftmost group of ink columns: on picture
+    cards the J/Q/K sits beside the court artwork, which otherwise joins every row band together."""
+    if split:
+        cruns = _runs(mask.any(axis=0), min_len=2, gap=1)
+        if not cruns:
+            return None
+        x1, x2 = cruns[0]
+        mask = mask[:, x1:x2]
+    runs = _runs(mask.any(axis=1), min_len=4)
     if not runs:
         return None
     y1, y2 = runs[0] if first else runs[-1]
@@ -183,11 +198,12 @@ def _rank(card_img, layout):
     w, h = card_img.size
     regions = ([(0.35, 0.40, 1.0, 1.0), (0.0, 0.0, 1.0, 1.0)] if layout == 'board'
                else [(0.0, 0.0, 0.5, 0.36), (0.0, 0.0, 0.6, 0.45)])
-    for (fx1, fy1, fx2, fy2) in regions:
+    passes = [(r, False) for r in regions] + ([(r, True) for r in regions] if layout != 'board' else [])
+    for (fx1, fy1, fx2, fy2), split in passes:
         crop = card_img.crop((int(fx1 * w), int(fy1 * h), int(fx2 * w), int(fy2 * h)))
         g = np.array(crop.convert('RGB')).astype(int)
         mask = g.min(axis=2) < 160  # ink → black on white, whatever its colour
-        mask = _isolate(mask, first=(layout != 'board'))
+        mask = _isolate(mask, first=(layout != 'board'), split=split)
         if mask is None:
             continue
         bw = Image.fromarray(np.where(mask, 0, 255).astype('uint8'))

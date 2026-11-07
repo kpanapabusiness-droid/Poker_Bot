@@ -93,5 +93,11 @@ im = bet_img('$1,875,000')
 narrow = C.read_amount(im, (38, 4, 38 + 52, 26))
 check('read_bet takes the wider read when it extends the narrow one', C.read_bet(im, (38, 4, 38 + 52, 26), pad=30) in (1875000.0, narrow) and (narrow is None or C.read_bet(im, (38, 4, 38 + 52, 26), pad=30) >= narrow))
 
+
+print('\nPicture cards from a real Torn screenshot')
+_fx = Image.open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'test_fixtures', 'hand_jh_ks.png'))
+_got = C.read_cards(_fx, (0, 0, _fx.width, _fx.height), 'hand')
+check('J beside its court artwork still reads (was rank=None → bot froze)', _got == ['JH', 'KS'], _got)
+
 print(f'\n{passed} passed, {failed} failed\n')
 sys.exit(1 if failed else 0)
