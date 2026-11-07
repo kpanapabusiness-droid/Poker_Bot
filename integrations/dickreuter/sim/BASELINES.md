@@ -187,3 +187,27 @@ river bluffs expect 58% folds and get 37%.
 
 Line breakdown, 6-handed, old → c1: turn bluffs −1,215 → −152 bb, flop bluffs −164 → +603 bb,
 river solver −1,088 → +296 bb.
+
+## 7–8 Nov: correctness round (ChatGPT follow-up review)
+
+Changed: perceived-range equity over the runouts (`rangeEquityVs`: exact on turn/river, 48 seeded
+samples on the flop, exact blockers; within 4% of exact enumeration), reproducible multiway caller
+enumeration (no Math.random; exact over the 8 likeliest callers; skipped mass counted as a full loss),
+side pots by street totals, bet sizing in range updates (size vs pot, vs the player's usual size, SPR;
+big = higher value bar and fewer medium hands; casual players don't bluff more with bigger bets),
+tracked bet size per player, strong made hands don't fold to "perceived range" pressure, an
+apparent-strength floor for casual callers ("two pair" on a paired board), solver river bets get fold
+estimates and feed fold learning, fading fold memory (~30 bets), range-level bluff selection (blockers,
+showdown value, balanced count by size, mixed at the boundary).
+
+Heads-up river bluff calibration (new `bluff_breakdown.py`): solver river bets expected 7–31 points more
+folds than happened, worst vs the casual player and on paired boards. Cause: casual callers see "two pair"
+on a paired board and call; the model rated those hands by true strength. With the apparent-strength
+floor: bluffer −7 → −4, thinker −2 → +1, paired boards −24 → −18, casual −31 → −26 (fold learning closes
+the rest over a session).
+
+Paired vs 20046f6 (seed 111): 6-handed −20.3 ± 20.6, heads-up +5.2 ± 19.5, 9-handed −0.7 ± 36.4.
+Ablations at 6-handed (600 decks): bluff selection off −8.2 ± 20.3, floor off −14.7 ± 20.4,
+exploit edge 5% −14.8 ± 21.3. All within noise of each other; bluff selection turned off by default
+(the simulated players over-fold, so a balanced bluff share leaves money; it's for thinking opponents).
+**No measured improvement against the simulated players this round**; the changes are correctness fixes.

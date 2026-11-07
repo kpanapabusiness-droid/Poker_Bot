@@ -65,7 +65,10 @@
     // u = 1 with no read (< 15 hands), 0.6, 0.3, 0.1 with 100+ hands
     uncertainty: { base: 0.04, unknown: 0.08 },
     // river/turn bluff selection over our perceived range (see selectBluff)
-    bluffSelect: { on: true, sdvMax: 0.30, blockerWeight: 1.0, exploitEdge: 0.15 },
+    // Off by default since 8 Nov: against the simulated casual players it cost ~12 bb/100 (they over-fold,
+    // so EV-chosen bluffs beat a balanced share). It matters against players who reason about our range;
+    // turn on for those games. Tested in test-bluff.js section 11.
+    bluffSelect: { on: false, sdvMax: 0.30, blockerWeight: 1.0, exploitEdge: 0.15 },
     // preflop exploit: 3-bet bluffs by the opener's fold-to-3-bet (after seeing them face minSeen 3-bets)
     exploit3bet: { minSeen: 6, wideAt: 0.65, noneAt: 0.35, extra: 'A2s-A3s,K9s,KTs,QTs,JTs,T9s,98s,87s,76s' },
     // How villains respond to our bets/raises (rangeFolds on): each holding continues with probability

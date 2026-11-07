@@ -121,6 +121,7 @@ console.log('\n10. Bluffing less into players who fight back');
 
 console.log('\n11. Choosing which hands bluff (range-level selection, 7 Nov)');
 {
+  S.MODEL.bluffSelect.on = true;  // off by default; tested here
   const board = 'Ks9s4d2c7s';
   const them = rng(0.4, [['Ks9s4d', 'call'], ['Ks9s4d2c', 'call'], [board, 'check']], 0.05);
   const us = rng(0.3, [['Ks9s4d', 'bet'], ['Ks9s4d2c', 'bet']]);
@@ -132,6 +133,7 @@ console.log('\n11. Choosing which hands bluff (range-level selection, 7 Nov)');
   const sdv = sel('9h8h');  // a pair of nines: real showdown value
   check('a hand with showdown value is not picked as a bluff (checks or value-bets instead)', !(sdv.tag === 'BLUFF'), [sdv.action, sdv.tag, sdv.explain.bluffSelection]);
   check('probabilities are between 0 and 1', [ra, rb].every(x => !x || (x.prob >= 0 && x.prob <= 1)));
+  S.MODEL.bluffSelect.on = false;
 }
 
 console.log('\n12. Opponent adaptation');
