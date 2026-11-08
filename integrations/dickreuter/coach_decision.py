@@ -308,6 +308,18 @@ def blinds_dealer(game, board, bb, hero_bet, players, n, chip_dealer, to_call=No
           and max(bets.values()) <= bb * 1.01 and game not in _hand_memory and len(ring) >= 2):
         i = ring.index(0)
         dealer = ring[i - 1] if len(ring) == 2 else ring[i - 2]
+    elif hero_bet <= 0 and to_call and to_call > 0 and len(ring) >= 3:
+        # The small blind's amount didn't read cleanly (Torn 8 Nov: "$12,5008"), so it's not exactly
+        # half a big blind. Nobody after us has acted yet, so going round from our seat, the first
+        # seat with chips in front, followed by another (the big blind), is the small blind. (A lone
+        # bet before it is someone posting a big blind to sit back in.)
+        i = ring.index(0)
+        after = ring[i + 1:] + ring[:i]
+        first = next((seat for k, seat in enumerate(after[:-1]) if bets.get(seat, 0) > 0 and bets.get(after[k + 1], 0) > 0), None)
+        if first is None:
+            return chip_dealer
+        j = ring.index(first)
+        dealer = ring[j - 1]
     else:
         return chip_dealer
     if dealer != chip_dealer:

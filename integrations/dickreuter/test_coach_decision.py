@@ -123,6 +123,16 @@ pl2 = [dict(p) for p in pl]; pl2[1]['bet'] = 1.0
 check("a big blind we posted to sit back in doesn't hide a real small blind",
       C.blinds_dealer('sbc3', [], 2.0, 2.0, pl2, 6, 5, to_call=0.0) == 1)
 
+print('\nDealer when the small blind misreads (Torn, 8 Nov: "$12,5008" → you were put on the button)')
+def _pl(bets, away=()):
+    return [{'seat': s, 'bet': bets.get(s, 0.0), 'stack': 1e6, 'inHand': s not in away, 'away': s in away} for s in range(1, 9)]
+for name, b, away, want in [('first chips after us are the small blind', {5: 125008.0, 6: 25000.0, 7: 25000.0, 8: 25000.0}, (3,), 4),
+                            ('a lone sit-in post before the blinds is skipped', {3: 25000.0, 6: 125008.0, 7: 25000.0, 8: 25000.0}, (), 5),
+                            ('we are the button when the blinds come right after us', {2: 125008.0, 4: 25000.0, 5: 25000.0}, (1, 3), 0)]:
+    C._dealer_by_game.clear()
+    got = C.blinds_dealer('fx-' + name, [], 25000.0, 0.0, _pl(b, away), 9, 0, 25000.0)
+    check(name, got == want, got)
+
 print('\nReport: results per hand')
 import csv as _csv
 rl = tempfile.mkdtemp()

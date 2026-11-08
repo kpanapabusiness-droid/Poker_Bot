@@ -306,6 +306,18 @@ def _ocr_text(img):
         return out.stdout.strip()
 
 
+def _grouped_ok(s):
+    """Thousands commas in the right places: '25,000' and '1,875,000' yes; '12,5008' (the table rim
+    read as an extra 8, Torn 8 Nov) and '1,875,00' (cut off by the box) no. Commas and decimals don't
+    mix in real amounts either."""
+    if ',' not in s:
+        return True
+    if '.' in s:
+        return False
+    head, *rest = s.split(',')
+    return 1 <= len(head) <= 3 and all(len(g) == 3 for g in rest)
+
+
 def parse_amount(text, need_dollar=False):
     """'$1,419,983' → 1419983, '$2K' → 2000, '$1.5M' → 1500000; None if there's no number.
     need_dollar: only accept text with a '$' (sites that always print one), so specks aren't read as 4."""
@@ -313,6 +325,8 @@ def parse_amount(text, need_dollar=False):
         return None
     best = None
     for m in _AMOUNT.finditer(text.replace(' ', '') if '$' in text else text):
+        if not _grouped_ok(m.group(1)):
+            continue
         num = float(m.group(1).replace(',', ''))
         mult = {'K': 1e3, 'M': 1e6, 'B': 1e9}.get((m.group(2) or '').upper(), 1)
         best = num * mult  # the last number wins ("POT: $7,500" → 7500)

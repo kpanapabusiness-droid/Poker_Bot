@@ -32,6 +32,15 @@ for text, want in [('$1,419,983', 1419983), ('POT: $7,500', 7500), ('RAISE TO $2
     got = C.parse_amount(text, need_dollar=True)
     check(f'{text!r} → {want}', got == want, got)
 
+print('\nThousands commas must be in the right places')
+for text, want in [('$12,5008', None), ('$25,0008', None), ('$1,875,00', None), ('$1,875,000', 1875000), ('$25,000', 25000), ('$12,500.38', None)]:
+    got = C.parse_amount(text, need_dollar=True)
+    check(f'{text!r} → {want}', got == want, got)
+rim = os.path.join(HERE, 'test_fixtures', 'seat6_rim_12500.png')
+if os.path.exists(rim):
+    got = C.read_bet(Image.open(rim), (30, 5, 96, 21))
+    check('seat 6 next to the table rim reads $12,500, not $125,008 (8 Nov screenshot)', got == 12500.0, got)
+
 print('\nA dropped K/M counts for the suffixed amount')
 check('{1.3: 2, 1300000: 1} → 1.3M', C._merge_dropped_suffix({1.3: 2, 1300000.0: 1}) == {1300000.0: 3})
 check('unrelated reads stay separate', C._merge_dropped_suffix({1875000.0: 1, 187500.0: 2}) == {1875000.0: 1, 187500.0: 2})
