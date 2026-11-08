@@ -343,7 +343,19 @@ def read_amount(img, box, need_dollar=True):
             votes[v] = votes.get(v, 0) + 1
     if not votes:
         return None
-    return max(votes, key=lambda k: (votes[k], k))
+    return max(_merge_dropped_suffix(votes).items(), key=lambda kv: (kv[1], kv[0]))[0]
+
+
+def _merge_dropped_suffix(votes):
+    """Tesseract often misses the K/M at the end of a short amount ("$1.3M" read as "$1.3" at two of
+    three scalings), but never invents one. So a read that is another read without its K/M/B counts
+    as a vote for the suffixed amount."""
+    out = dict(votes)
+    for v in sorted(votes):
+        for w in list(out):
+            if v in out and w != v and v > 0 and any(abs(w / v - m) <= 1e-6 * m for m in (1e3, 1e6, 1e9)):
+                out[w] += out.pop(v)
+    return out
 
 
 _tess_name = None

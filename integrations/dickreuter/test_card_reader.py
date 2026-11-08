@@ -32,6 +32,14 @@ for text, want in [('$1,419,983', 1419983), ('POT: $7,500', 7500), ('RAISE TO $2
     got = C.parse_amount(text, need_dollar=True)
     check(f'{text!r} → {want}', got == want, got)
 
+print('\nA dropped K/M counts for the suffixed amount')
+check('{1.3: 2, 1300000: 1} → 1.3M', C._merge_dropped_suffix({1.3: 2, 1300000.0: 1}) == {1300000.0: 3})
+check('unrelated reads stay separate', C._merge_dropped_suffix({1875000.0: 1, 187500.0: 2}) == {1875000.0: 1, 187500.0: 2})
+btn = os.path.join(HERE, 'test_fixtures', 'call_btn_1_3m.png')
+if os.path.exists(btn):
+    got = C.read_amount(Image.open(btn), (0, 0, 210, 26))
+    check('Torn "CALL $1.3M" button reads 1,300,000 (8 Nov screenshot)', got == 1300000.0, got)
+
 fb, fh, fs = font(40), font(24), font(18)
 if fb is None:
     print('  (skipped card and image tests: no TrueType font found)')

@@ -379,6 +379,13 @@ def main(repo):
           "                        (table.check_for_button() or __import__('poker.decisionmaker.coach_decision', fromlist=['preaction'])"
           ".preaction(table, history, mouse)) and \\\n",
           "fromlist=['preaction']")
+    # Torn shows Bet/Check/Fold while the flop is still face-down: wait for the cards instead of
+    # deciding a "preflop" spot that is really the flop (coach_decision.street_settled).
+    patch(main_py,
+          "                        table.get_current_bet_value(strategy)\n",
+          "                        table.get_current_bet_value(strategy) and \\\n"
+          "                        __import__('poker.decisionmaker.coach_decision', fromlist=['street_settled']).street_settled(table)\n",
+          "fromlist=['street_settled']")
     # Exact bet sizes: click the amount box, type the coach's (rounded) size, then press Raise/Bet.
     # Used when the table maps mouse_bet_amount; otherwise the coach picks the nearest preset.
     patch(mm,

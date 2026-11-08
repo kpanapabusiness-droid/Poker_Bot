@@ -158,6 +158,17 @@ check('a dropped digit is restored exactly', tc == 1875000.0 and pl[0]['bet'] ==
 check('and the correction is reported', bool(warn) and '1,875,000' in warn, warn)
 check('a rounded button ($1.5M) agreeing with the read changes nothing', C.check_to_call(1516711.0, 1500000.0, [{'seat': 5, 'bet': 1516711.0}], 0.0) == (1516711.0, None))
 check('no button read → no change', C.check_to_call(5000.0, None, [], 0.0) == (5000.0, None))
+pl = [{'seat': 3, 'bet': 1275000.0}]
+check('"CALL $1.3M" read as 1.3 keeps the real 1,275,000 (Torn, 8 Nov: called 1.28M as if free)',
+      C.check_to_call(1275000.0, 1.3, pl, 0.0) == (1275000.0, None) and pl[0]['bet'] == 1275000.0)
+check('the same for a dropped K ("$45K" read as 45)', C.check_to_call(45000.0, 45.0, [{'seat': 1, 'bet': 45000.0}], 0.0) == (45000.0, None))
+
+print('\nFlop still being dealt (Torn, 8 Nov: Bet/Check/Fold with the flop face-down, read as preflop)')
+check('no board and no chips in front of anyone → wait', C.preflop_settled([], [0.0, None, 0.0]) is False)
+check('blinds in front → a real preflop spot', C.preflop_settled([], [0.0, 12500.0, 25000.0]) is True)
+check('board read → fine', C.preflop_settled(['7C', '6H', '9C'], []) is True)
+t = NS(table_dict={}, screenshot=None)
+check('tables without the coach reader are never held up', C.street_settled(t) is True)
 
 print('\nInstaller')
 dr = os.environ.get('DICKREUTER_DIR', os.path.join(HERE, '..', '..', '..', 'dickreuter', 'poker'))
@@ -188,6 +199,7 @@ if os.path.exists(os.path.join(dr, 'poker', 'main.py')):
         check('collusion forced off', "['collusion'] = 0" in sh and "['collusion'] = 1" not in sh)
         cfg = open(os.path.join(tmp, 'poker', 'config.ini')).read() if os.path.exists(os.path.join(tmp, 'poker', 'config.ini')) else 'db = http://127.0.0.1:7778/'
         check('config.ini points at the local database', 'db = http://127.0.0.1:7778/' in cfg and 'dickreuter.com' not in cfg)
+        check('waits for the flop while it is dealt', main.count("fromlist=['street_settled']") == 1)
         check('coach_decision.py copied in', os.path.exists(os.path.join(tmp, 'poker', 'decisionmaker', 'coach_decision.py')))
     finally:
         shutil.rmtree(tmp)

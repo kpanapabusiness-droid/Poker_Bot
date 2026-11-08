@@ -207,6 +207,9 @@ def check_to_call(to_call, call_btn, players, hero_bet):
         return to_call, None
     if abs(to_call - call_btn) <= 0.12 * call_btn:
         return to_call, None
+    # the button read without its K/M ("CALL $1.3M" → 1.3): it agrees with the bets, keep them
+    if any(abs(to_call - call_btn * m) <= 0.12 * call_btn * m for m in (1e3, 1e6, 1e9)):
+        return to_call, None
     for k in (10, 100, 0.1, 0.01):
         if abs(to_call * k - call_btn) <= 0.06 * call_btn:
             fixed = to_call * k
@@ -587,6 +590,49 @@ def wait_turn_over(table, timeout=90):
         if not still_my_turn(table):
             return
     log.info("Still your turn after %ss - carrying on", timeout)
+
+
+def preflop_settled(board, bets):
+    """False when this can't be a real preflop spot: no board, and no chips in front of anyone.
+    The blinds stay in front of their seats until preflop ends, so this means the betting finished
+    and the flop is still being dealt face-down (Torn already shows Bet/Check/Fold then)."""
+    return bool(board) or any((b or 0) > 0 for b in bets)
+
+
+_unsettled = {'since': None}
+
+
+def street_settled(t, max_wait=6.0):
+    """Part of dickreuter's "ready" checks (install.py adds it): wait for the next screenshot while the
+    flop is being dealt, instead of deciding a "preflop" spot that's really the flop. After max_wait
+    seconds it lets the decision through anyway, so a misread can never stall the bot."""
+    import time
+    try:
+        td = getattr(t, 'table_dict', None) or {}
+        img = getattr(t, 'screenshot', None)
+        if not td.get('coach_reader') or img is None:
+            return True
+        try:
+            from poker.scraper.card_reader import read_bet
+        except ImportError:
+            from card_reader import read_bet
+        bets = [read_bet(img, b) for b in (_box(td, 'player_pot_area', s) for s in range(int(_num(getattr(t, 'total_players', 9), 9)) or 9)) if b]
+        if preflop_settled(getattr(t, 'cardsOnTable', None), bets):
+            _unsettled['since'] = None
+            return True
+        now = time.time()
+        if _unsettled['since'] is None:
+            _unsettled['since'] = now
+        if now - _unsettled['since'] > max_wait:
+            log.info("No chips in front of anyone preflop for %ss - deciding anyway", max_wait)
+            _unsettled['since'] = None
+            return True
+        log.info("Preflop betting is over and the flop is still being dealt - waiting for it")
+        time.sleep(0.4)
+        return False
+    except Exception as e:
+        log.debug("street check failed: %s", e)
+        return True
 
 
 def chen(cards):
